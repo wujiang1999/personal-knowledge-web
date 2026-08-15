@@ -7,6 +7,7 @@ export interface Concept {
   type: string;
   title: string;
   description: string | null;
+  category: string | null;
   status: string;
   tags: string[];
   current_version: number;
@@ -32,6 +33,7 @@ export interface ConceptInput {
   type: string;
   title: string;
   description?: string;
+  category?: string;
   tags?: string[];
   status?: string;
   body: string;
@@ -41,16 +43,31 @@ export function sha256Hex(input: string): string {
   return "sha256:" + createHash("sha256").update(input, "utf8").digest("hex");
 }
 
+export function normalizeCategory(input?: string | null): string | null {
+  const segs = (input ?? "")
+    .split("/")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return segs.length ? segs.join("/") : null;
+}
+
 export async function listConcepts(opts?: {
   status?: string;
+  category?: string;
   limit?: number;
 }): Promise<Concept[]> {
   const params: unknown[] = [];
-  let sql = "SELECT * FROM concepts";
+  const where: string[] = [];
   if (opts?.status) {
     params.push(opts.status);
-    sql += " WHERE status = $1";
+    where.push(`status = $${params.length}`);
   }
+  if (opts?.category) {
+    params.push(opts.category);
+    where.push(`(category = $${params.length} OR category LIKE $${params.length} || '/%')`);
+  }
+  let sql = "SELECT * FROM concepts";
+  if (where.length) sql += " WHERE " + where.join(" AND ");
   sql += " ORDER BY updated_at DESC";
   if (opts?.limit) {
     params.push(opts.limit);
@@ -58,6 +75,56 @@ export async function listConcepts(opts?: {
   }
   const { rows } = await query<Concept>(sql, params);
   return rows;
+}
+
+export interface CategoryTreeNode {
+  name: string;
+  path: string;
+  concepts: Concept[];
+  children: CategoryTreeNode[];
+}
+
+export function buildCategoryTree(concepts: Concept[]): {
+  rootConcepts: Concept[];
+  roots: CategoryTreeNode[];
+} {
+  const roots: CategoryTreeNode[] = [];
+  const rootConcepts: Concept[] = [];
+  const map = new Map<string, CategoryTreeNode>();
+
+  for (const c of concepts) {
+    const path = normalizeCategory(c.category);
+    if (!path) {
+      rootConcepts.push(c);
+      continue;
+    }
+    const segs = path.split("/");
+    let siblings = roots;
+    let fullPath = "";
+    for (let i = 0; i < segs.length; i++) {
+      fullPath = fullPath ? `${fullPath}/${segs[i]}` : segs[i];
+      let node = map.get(fullPath);
+      if (!node) {
+        node = { name: segs[i], path: fullPath, concepts: [], children: [] };
+        map.set(fullPath, node);
+        siblings.push(node);
+      }
+      if (i === segs.length - 1) node.concepts.push(c);
+      siblings = node.children;
+    }
+  }
+
+  const sortNodes = (nodes: CategoryTreeNode[]) => {
+    nodes.sort((a, b) => a.name.localeCompare(b.name));
+    for (const n of nodes) {
+      n.concepts.sort((a, b) => a.title.localeCompare(b.title));
+      sortNodes(n.children);
+    }
+  };
+  sortNodes(roots);
+  rootConcepts.sort((a, b) => a.title.localeCompare(b.title));
+
+  return { rootConcepts, roots };
 }
 
 export async function getConceptDetail(id: string): Promise<ConceptDetail | null> {
@@ -125,6 +192,7 @@ export async function createConcept(input: ConceptInput, username: string): Prom
   const type = input.type.trim() || "Note";
   const title = input.title.trim();
   const description = input.description?.trim() || null;
+  const category = normalizeCategory(input.category);
   const tags = input.tags?.map((t) => t.trim()).filter(Boolean) ?? [];
   const status = input.status ?? "stable";
 
@@ -136,8 +204,8 @@ export async function createConcept(input: ConceptInput, username: string): Prom
       ["text", title || null, body, contentHash]
     );
     const inserted = await client.query(
-      "INSERT INTO concepts (type, title, description, tags, status) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-      [type, title, description, tags, status]
+      "INSERT INTO concepts (type, title, description, category, tags, status) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+      [type, title, description, category, tags, status]
     );
     const conceptId = inserted.rows[0].id as string;
     await client.query(
@@ -169,6 +237,7 @@ export async function addConceptVersion(
   const metadata = {
     title: input.title.trim(),
     description: input.description?.trim() || null,
+    category: normalizeCategory(input.category),
     tags: input.tags?.map((t) => t.trim()).filter(Boolean) ?? [],
     type: input.type.trim() || "Note",
     status: input.status ?? "stable",
@@ -188,8 +257,8 @@ export async function addConceptVersion(
     if (contentHash === currentHash) {
       // 正文未变化：只更新元信息，不新增版本、不新增来源
       await client.query(
-        "UPDATE concepts SET title = $2, description = $3, tags = $4, type = $5, status = $6, updated_at = now() WHERE id = $1",
-        [id, metadata.title, metadata.description, metadata.tags, metadata.type, metadata.status]
+        "UPDATE concepts SET title = $2, description = $3, category = $4, tags = $5, type = $6, status = $7, updated_at = now() WHERE id = $1",
+        [id, metadata.title, metadata.description, metadata.category, metadata.tags, metadata.type, metadata.status]
       );
       await client.query("COMMIT");
       return { version: currentVersion, created: false };
@@ -205,8 +274,8 @@ export async function addConceptVersion(
       [id, nextVersion, body, contentHash, `human:${username}`]
     );
     await client.query(
-      "UPDATE concepts SET current_version = $2, title = $3, description = $4, tags = $5, type = $6, status = $7, updated_at = now() WHERE id = $1",
-      [id, nextVersion, metadata.title, metadata.description, metadata.tags, metadata.type, metadata.status]
+      "UPDATE concepts SET current_version = $2, title = $3, description = $4, category = $5, tags = $6, type = $7, status = $8, updated_at = now() WHERE id = $1",
+      [id, nextVersion, metadata.title, metadata.description, metadata.category, metadata.tags, metadata.type, metadata.status]
     );
     await client.query("COMMIT");
     return { version: nextVersion, created: true };
@@ -243,6 +312,7 @@ export interface ExportConcept {
   type: string;
   title: string;
   description: string | null;
+  category: string | null;
   status: string;
   tags: string[];
   current_version: number;
@@ -255,7 +325,7 @@ export interface ExportConcept {
 export async function listConceptsForExport(): Promise<ExportConcept[]> {
   const { rows } = await query<ExportConcept>(`
     SELECT
-      c.id, c.type, c.title, c.description, c.status, c.tags,
+      c.id, c.type, c.title, c.description, c.category, c.status, c.tags,
       c.current_version, c.updated_at,
       v.body_markdown, v.content_hash, v.generated_by
     FROM concepts c

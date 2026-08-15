@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS concepts (
   type            text NOT NULL,
   title           text NOT NULL,
   description     text,
+  category        text,
   status          text NOT NULL DEFAULT 'stable',   -- draft | stable | deprecated
   tags            text[] NOT NULL DEFAULT '{}',
   current_version integer NOT NULL DEFAULT 1,

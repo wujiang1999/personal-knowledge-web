@@ -8,6 +8,7 @@ export interface ConceptFormInitial {
   type?: string;
   title?: string;
   description?: string;
+  category?: string;
   tags?: string[];
   status?: string;
   body?: string;
@@ -44,6 +45,7 @@ export function ConceptForm({
       type: fd.get("type") || "Note",
       title: fd.get("title"),
       description: fd.get("description") || undefined,
+      category: fd.get("category") || undefined,
       tags,
       status: fd.get("status") || "stable",
       body: fd.get("body"),
@@ -124,6 +126,17 @@ export function ConceptForm({
           name="description"
           maxLength={1000}
           defaultValue={initial?.description ?? ""}
+          className={inputCls}
+        />
+      </div>
+
+      <div>
+        <label className={labelCls}>目录</label>
+        <input
+          name="category"
+          defaultValue={initial?.category ?? ""}
+          placeholder="如：技术/部署（用 / 分层级，留空 = 根目录）"
+          maxLength={200}
           className={inputCls}
         />
       </div>

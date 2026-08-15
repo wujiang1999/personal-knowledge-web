@@ -32,6 +32,14 @@ export default async function ConceptDetailPage({
           <span className="text-xs text-zinc-400 dark:text-zinc-500">v{concept.current_version}</span>
         </div>
         {concept.description && <p className="mt-1 text-zinc-600 dark:text-zinc-300">{concept.description}</p>}
+        {concept.category && (
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+            📁{" "}
+            <Link href={`/knowledge?category=${encodeURIComponent(concept.category)}`} className="hover:underline">
+              {concept.category}
+            </Link>
+          </p>
+        )}
         {concept.tags.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1">
             {concept.tags.map((t) => (

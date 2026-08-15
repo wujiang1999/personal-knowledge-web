@@ -29,6 +29,7 @@ function buildFrontmatter(c: ExportConcept): Record<string, unknown> {
     title: c.title,
   };
   if (c.description) fm.description = c.description;
+  if (c.category) fm.category = c.category;
   if (c.tags.length) fm.tags = c.tags;
   fm.status = c.status;
   fm.generated = {
