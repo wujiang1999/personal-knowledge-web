@@ -1,7 +1,18 @@
 -- personal-knowledge-web schema (single-workspace MVP)
 -- Apply with: npm run db:migrate  (or psql -f db/schema.sql)
+-- Fresh installs get the complete final shape here; existing databases are
+-- brought up to date by the numbered files in db/migrations/.
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- -------------------------------
+-- migration bookkeeping
+-- -------------------------------
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version    integer PRIMARY KEY,
+  name       text NOT NULL,
+  applied_at timestamptz NOT NULL DEFAULT now()
+);
 
 -- -------------------------------
 -- users (single-user / invite model)
@@ -10,6 +21,7 @@ CREATE TABLE IF NOT EXISTS users (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   username      text NOT NULL UNIQUE,
   password_hash text NOT NULL,
+  token_version integer NOT NULL DEFAULT 1,
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 
@@ -18,7 +30,6 @@ CREATE TABLE IF NOT EXISTS users (
 -- -------------------------------
 CREATE TABLE IF NOT EXISTS concepts (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  okf_path        text,
   type            text NOT NULL,
   title           text NOT NULL,
   description     text,
@@ -31,12 +42,18 @@ CREATE TABLE IF NOT EXISTS concepts (
 );
 
 -- -------------------------------
--- concept_versions (immutable history)
+-- concept_versions (immutable history, with metadata snapshot)
 -- -------------------------------
 CREATE TABLE IF NOT EXISTS concept_versions (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   concept_id     uuid NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
   version_number integer NOT NULL,
+  title          text,
+  description    text,
+  category       text,
+  tags           text[] NOT NULL DEFAULT '{}',
+  status         text,
+  type           text,
   body_markdown  text NOT NULL,
   content_tsv    tsvector,
   content_hash   text NOT NULL,
@@ -46,10 +63,11 @@ CREATE TABLE IF NOT EXISTS concept_versions (
 );
 
 -- -------------------------------
--- sources (raw input traceability)
+-- sources (raw input traceability, linked back to the concept)
 -- -------------------------------
 CREATE TABLE IF NOT EXISTS sources (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  concept_id    uuid REFERENCES concepts(id) ON DELETE SET NULL,
   source_type   text NOT NULL,       -- text | markdown
   original_name text,
   content       text,
@@ -60,12 +78,13 @@ CREATE TABLE IF NOT EXISTS sources (
 -- -------------------------------
 -- indexes
 -- -------------------------------
-CREATE INDEX IF NOT EXISTS idx_concepts_title        ON concepts (title);
-CREATE INDEX IF NOT EXISTS idx_concepts_status       ON concepts (status);
-CREATE INDEX IF NOT EXISTS idx_versions_concept      ON concept_versions (concept_id);
-CREATE INDEX IF NOT EXISTS idx_versions_tsv          ON concept_versions USING GIN (content_tsv);
-CREATE INDEX IF NOT EXISTS idx_versions_body_trgm    ON concept_versions USING GIN (body_markdown gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_concepts_title_trgm   ON concepts USING GIN (title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_concepts_title      ON concepts (title);
+CREATE INDEX IF NOT EXISTS idx_concepts_status     ON concepts (status);
+CREATE INDEX IF NOT EXISTS idx_concepts_title_trgm ON concepts USING GIN (title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_concepts_desc_trgm  ON concepts USING GIN (description gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_versions_tsv        ON concept_versions USING GIN (content_tsv);
+CREATE INDEX IF NOT EXISTS idx_versions_body_trgm  ON concept_versions USING GIN (body_markdown gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_sources_concept_id  ON sources (concept_id);
 
 -- -------------------------------
 -- tsvector maintenance trigger

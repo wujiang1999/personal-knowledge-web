@@ -5,6 +5,7 @@ import { query } from "./db";
 export interface AuthUser {
   id: string;
   username: string;
+  tokenVersion: number;
 }
 
 /**
@@ -14,9 +15,15 @@ export interface AuthUser {
 export async function requireUser(): Promise<AuthUser> {
   const session = await getSession();
   if (!session) redirect("/login");
-  const { rows } = await query<AuthUser>("SELECT id, username FROM users WHERE id = $1", [session.sub]);
-  if (rows.length === 0) redirect("/login");
-  return rows[0];
+  const { rows } = await query<{ id: string; username: string; token_version: number }>(
+    "SELECT id, username, token_version FROM users WHERE id = $1",
+    [session.sub]
+  );
+  // token_version is the authoritative revocation check: middleware only
+  // verifies the JWT signature (it runs on Edge and cannot reach pg). A token
+  // whose tv is out of date (e.g. after a password change) is rejected here.
+  if (rows.length === 0 || rows[0].token_version !== session.tokenVersion) redirect("/login");
+  return { id: rows[0].id, username: rows[0].username, tokenVersion: rows[0].token_version };
 }
 
 /**
@@ -26,7 +33,10 @@ export async function requireUser(): Promise<AuthUser> {
 export async function requireApiUser(): Promise<AuthUser | null> {
   const session = await getSession();
   if (!session) return null;
-  const { rows } = await query<AuthUser>("SELECT id, username FROM users WHERE id = $1", [session.sub]);
-  if (rows.length === 0) return null;
-  return rows[0];
+  const { rows } = await query<{ id: string; username: string; token_version: number }>(
+    "SELECT id, username, token_version FROM users WHERE id = $1",
+    [session.sub]
+  );
+  if (rows.length === 0 || rows[0].token_version !== session.tokenVersion) return null;
+  return { id: rows[0].id, username: rows[0].username, tokenVersion: rows[0].token_version };
 }

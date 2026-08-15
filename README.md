@@ -22,7 +22,7 @@
 - 版本历史与内容哈希（SHA-256）追溯
 - 全文搜索（标题 / 正文 / 描述，中文与英文、代码关键词均可命中）
 - 原始来源保留（每次录入的原始输入留存，用于可追溯与去重）
-- OKF v0.2 Bundle 导出（`.okf/index.md`、`log.md`、`concepts/*.md`，ZIP 下载）
+- OKF v0.2 Bundle 导出（`.okf/index.md`、`log.md`、按 type 分目录的概念 Markdown，ZIP 下载）
 - 路由级 + 接口级双重鉴权（Middleware + Server Component / Route Handler）
 
 ## 目录结构
@@ -44,7 +44,7 @@ middleware.ts         # 登录保护与重定向
 核心设计遵循方案原则：
 
 - **版本不可变**：修改知识不更新旧版本正文，而是新增一行 `concept_versions`，再更新 `concepts.current_version`。
-- **原始资料不覆盖**：每次录入/编辑都写入一条 `sources` 记录（内容哈希去重基础）。
+- **原始资料不覆盖**：每次录入/编辑都写入一条 `sources` 记录（同概念、同正文哈希的重复来源会被跳过，实现去重）。
 - **OKF 是交换格式**：数据库是运行时事实源，OKF 是确定性导出结果。
 
 ## 环境变量
@@ -55,7 +55,7 @@ middleware.ts         # 登录保护与重定向
 DATABASE_URL=postgresql://kbapp:CHANGE_ME@127.0.0.1:5432/knowledge
 SESSION_SECRET=CHANGE_ME          # openssl rand -hex 32
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=990327             # 仅 seed 首次创建时使用
+ADMIN_PASSWORD=CHANGE_ME          # 必填；仅 seed 首次创建时使用，seed 缺省会报错
 ```
 
 ## 本地运行
@@ -104,7 +104,7 @@ npm start            # 运行生产构建
 └── deprecated/...        # status=deprecated 的概念
 ```
 
-每个概念文件带 YAML frontmatter，`type` 必填，并含 `status`、`generated`、`verified`、`sources`、自定义 `kb` 字段（id/version/language/content_hash/sensitivity）。
+每个概念文件带 YAML frontmatter，`type` 必填，并含 `status`、`generated`（`at` 取自当前版本创建时间，不受元数据-only 编辑影响）、自定义 `kb` 字段（id/version/language/content_hash/sensitivity）。
 
 ## 后续阶段（方案文档 P1–P5）
 
@@ -112,10 +112,13 @@ npm start            # 运行生产构建
 - 注入流程（Markdown/PDF/DOCX/URL）、LLM 知识原子化
 - 近似去重、冲突审核、Claim 抽取
 - OKF 同步到 Private Git 仓库
-- 中文 PGroonga 全文检索
+- 中文 PGroonga 全文检索（需在 ECS 的 PostgreSQL 16 安装 `postgresql-16-pgroonga` 扩展并 `CREATE EXTENSION pgroonga`，替换 `simple` tsvector 管线）
 
 ## 安全说明
 
 - 数据库密码、会话密钥仅存在于本地 `.env`（已 gitignore），**不会**入库。
 - 浏览器只经过 Next.js 服务端访问数据库，`DATABASE_URL` 不进入前端。
 - 登录密码 bcrypt（cost 12）哈希存储，绝不存明文。
+- 会话为 JWT（httpOnly cookie，7 天）；改密会提升 `token_version` 使旧会话立即失效。
+- 登录有内存限流（同一用户名 15 分钟内连续失败 5 次即锁定 15 分钟）。
+- 生产环境启用安全响应头（CSP、`X-Frame-Options: DENY`、`nosniff` 等），所有 `/api/*` 响应 `Cache-Control: no-store`。

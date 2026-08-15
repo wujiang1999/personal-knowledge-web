@@ -2,17 +2,42 @@ import Link from "next/link";
 import { requireUser } from "@/lib/requireUser";
 import { listConcepts, searchConcepts } from "@/lib/concepts";
 
+const PAGE_SIZE = 20;
+
 export default async function KnowledgePage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; category?: string }>;
+  searchParams: Promise<{ q?: string; category?: string; page?: string }>;
 }) {
   await requireUser();
-  const { q, category } = await searchParams;
+  const { q, category, page: pageParam } = await searchParams;
   const query = q?.trim();
-  const results = query
-    ? await searchConcepts(query, 50)
-    : await listConcepts({ category: category?.trim() || undefined });
+  const page = Math.max(1, Number(pageParam) || 1);
+
+  let results: (Awaited<ReturnType<typeof listConcepts>>[number] & { body_markdown?: string })[];
+  let hasMore = false;
+  if (query) {
+    // Search is already ranked and capped at 50; paginating it is a follow-up.
+    results = await searchConcepts(query, 50);
+  } else {
+    // Fetch one extra row to detect "has more", then slice to the page.
+    const fetched = await listConcepts({
+      category: category?.trim() || undefined,
+      limit: PAGE_SIZE + 1,
+      offset: (page - 1) * PAGE_SIZE,
+    });
+    hasMore = fetched.length > PAGE_SIZE;
+    results = fetched.slice(0, PAGE_SIZE);
+  }
+
+  const hrefFor = (p: number) => {
+    const sp = new URLSearchParams();
+    if (query) sp.set("q", query);
+    if (category) sp.set("category", category);
+    if (p > 1) sp.set("page", String(p));
+    const s = sp.toString();
+    return s ? `/knowledge?${s}` : "/knowledge";
+  };
 
   return (
     <div className="space-y-6">
@@ -52,7 +77,7 @@ export default async function KnowledgePage({
       {!query && category && (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
           📁 目录：<span className="font-medium text-zinc-800 dark:text-zinc-100">{category}</span>
-          <span className="ml-1">（{results.length} 条）</span>
+          <span className="ml-1">（本页 {results.length} 条）</span>
           <Link href="/knowledge" className="ml-2 underline">
             清除
           </Link>
@@ -82,6 +107,28 @@ export default async function KnowledgePage({
           </li>
         ))}
       </ul>
+
+      {!query && page > 1 && (
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-zinc-500 dark:text-zinc-400">第 {page} 页</span>
+          <div className="flex gap-2">
+            <Link
+              href={hrefFor(page - 1)}
+              className="rounded-md border border-zinc-300 px-3 py-1.5 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              ← 上一页
+            </Link>
+            {hasMore && (
+              <Link
+                href={hrefFor(page + 1)}
+                className="rounded-md border border-zinc-300 px-3 py-1.5 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                下一页 →
+              </Link>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

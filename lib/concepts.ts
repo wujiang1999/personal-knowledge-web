@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { getPool, query } from "./db";
 
+/** Thrown when a concept lookup by id finds no row (typed 404, not string-match). */
+export class NotFoundError extends Error {}
+
 export interface Concept {
   id: string;
-  okf_path: string | null;
   type: string;
   title: string;
   description: string | null;
@@ -19,6 +21,12 @@ export interface ConceptVersion {
   id: string;
   concept_id: string;
   version_number: number;
+  title: string | null;
+  description: string | null;
+  category: string | null;
+  tags: string[];
+  status: string | null;
+  type: string | null;
   body_markdown: string;
   content_hash: string;
   generated_by: string | null;
@@ -55,6 +63,7 @@ export async function listConcepts(opts?: {
   status?: string;
   category?: string;
   limit?: number;
+  offset?: number;
 }): Promise<Concept[]> {
   const params: unknown[] = [];
   const where: string[] = [];
@@ -72,6 +81,10 @@ export async function listConcepts(opts?: {
   if (opts?.limit) {
     params.push(opts.limit);
     sql += ` LIMIT $${params.length}`;
+  }
+  if (opts?.offset) {
+    params.push(opts.offset);
+    sql += ` OFFSET $${params.length}`;
   }
   const { rows } = await query<Concept>(sql, params);
   return rows;
@@ -147,25 +160,33 @@ export async function searchConcepts(q: string, limit = 20): Promise<SearchResul
   const needle = q.trim().slice(0, 200);
   if (!needle) return [];
 
-  // Only use full-text search when the query contains a real token; otherwise
-  // websearch_to_tsquery returns an empty tsquery and `@@ ''` throws.
-  const hasToken = /[a-z0-9_一-鿿]/i.test(needle);
-  const ftsScore = hasToken
+  // Escape LIKE metacharacters — % and _ are user-controllable wildcards.
+  // Passed as its own parameter ($2) so similarity/FTS still see the raw $1.
+  const like = "%" + needle.replace(/[\\%_]/g, (m) => "\\" + m) + "%";
+
+  // 'simple' FTS treats a CJK run as one lexeme, so a Chinese query can never
+  // match content_tsv. Only enter the FTS branch for ASCII tokens; Chinese
+  // queries rank purely via pg_trgm similarity + ILIKE (until PGroonga).
+  const hasAscii = /[a-z0-9]/i.test(needle);
+  const ftsScore = hasAscii
     ? "+ COALESCE(ts_rank(v.content_tsv, websearch_to_tsquery('simple', $1)), 0)"
     : "";
-  const ftsWhere = hasToken
+  const ftsWhere = hasAscii
     ? "v.content_tsv @@ websearch_to_tsquery('simple', $1) OR "
     : "";
 
   const sql = `
     SELECT
-      c.id, c.okf_path, c.type, c.title, c.description, c.status, c.tags,
+      c.id, c.type, c.title, c.description, c.status, c.tags,
       c.current_version, c.created_at, c.updated_at,
       v.body_markdown,
       (
-        (CASE WHEN c.title ILIKE '%' || $1 || '%' THEN 30 ELSE 0 END)
-        + (CASE WHEN v.body_markdown ILIKE '%' || $1 || '%' THEN 10 ELSE 0 END)
+        (CASE WHEN c.title ILIKE $2 THEN 30 ELSE 0 END)
+        + (CASE WHEN v.body_markdown ILIKE $2 THEN 15 ELSE 0 END)
+        + (CASE WHEN c.description ILIKE $2 THEN 8 ELSE 0 END)
         + (similarity(c.title, $1) * 50)
+        + (similarity(v.body_markdown, $1) * 20)
+        + (similarity(COALESCE(c.description, ''), $1) * 12)
         ${ftsScore}
       ) AS score
     FROM concepts c
@@ -173,16 +194,17 @@ export async function searchConcepts(q: string, limit = 20): Promise<SearchResul
       ON v.concept_id = c.id AND v.version_number = c.current_version
     WHERE (
       ${ftsWhere}
-      v.body_markdown ILIKE '%' || $1 || '%'
-      OR c.title ILIKE '%' || $1 || '%'
+      v.body_markdown ILIKE $2
+      OR c.title ILIKE $2
+      OR c.description ILIKE $2
       OR c.title % $1
-      OR c.description ILIKE '%' || $1 || '%'
+      OR similarity(v.body_markdown, $1) > 0.05
     )
     ORDER BY score DESC, c.updated_at DESC
-    LIMIT $2
+    LIMIT $3
   `;
 
-  const { rows } = await query<SearchResult>(sql, [needle, limit]);
+  const { rows } = await query<SearchResult>(sql, [needle, like, limit]);
   return rows;
 }
 
@@ -199,18 +221,20 @@ export async function createConcept(input: ConceptInput, username: string): Prom
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
-    await client.query(
-      "INSERT INTO sources (source_type, original_name, content, content_hash) VALUES ($1, $2, $3, $4)",
-      ["text", title || null, body, contentHash]
-    );
     const inserted = await client.query(
       "INSERT INTO concepts (type, title, description, category, tags, status) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
       [type, title, description, category, tags, status]
     );
     const conceptId = inserted.rows[0].id as string;
+    // Raw-input traceability: link the source back to the new concept.
     await client.query(
-      "INSERT INTO concept_versions (concept_id, version_number, body_markdown, content_hash, generated_by) VALUES ($1, 1, $2, $3, $4)",
-      [conceptId, body, contentHash, `human:${username}`]
+      "INSERT INTO sources (concept_id, source_type, original_name, content, content_hash) VALUES ($1, $2, $3, $4, $5)",
+      [conceptId, "text", title || null, body, contentHash]
+    );
+    // Version 1 carries a metadata snapshot so past versions stay reconstructable.
+    await client.query(
+      "INSERT INTO concept_versions (concept_id, version_number, title, description, category, tags, status, type, body_markdown, content_hash, generated_by) VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+      [conceptId, title, description, category, tags, status, type, body, contentHash, `human:${username}`]
     );
     await client.query("COMMIT");
     return conceptId;
@@ -250,28 +274,40 @@ export async function addConceptVersion(
       "SELECT c.current_version, v.content_hash FROM concepts c JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version WHERE c.id = $1 FOR UPDATE",
       [id]
     );
-    if (cur.rows.length === 0) throw new Error("Concept not found");
+    if (cur.rows.length === 0) throw new NotFoundError("Concept not found");
     const currentVersion = cur.rows[0].current_version as number;
     const currentHash = cur.rows[0].content_hash as string;
 
     if (contentHash === currentHash) {
-      // 正文未变化：只更新元信息，不新增版本、不新增来源
+      // 正文未变化：只更新元信息，不新增版本、不新增来源；同步刷新当前版本行的
+      // 快照列，保证"最新版本行即最新元数据"不变量（也修正导出的 generated.at）。
       await client.query(
         "UPDATE concepts SET title = $2, description = $3, category = $4, tags = $5, type = $6, status = $7, updated_at = now() WHERE id = $1",
         [id, metadata.title, metadata.description, metadata.category, metadata.tags, metadata.type, metadata.status]
+      );
+      await client.query(
+        "UPDATE concept_versions SET title = $2, description = $3, category = $4, tags = $5, status = $6, type = $7 WHERE concept_id = $1 AND version_number = (SELECT current_version FROM concepts WHERE id = $1)",
+        [id, metadata.title, metadata.description, metadata.category, metadata.tags, metadata.status, metadata.type]
       );
       await client.query("COMMIT");
       return { version: currentVersion, created: false };
     }
 
     const nextVersion = currentVersion + 1;
-    await client.query(
-      "INSERT INTO sources (source_type, original_name, content, content_hash) VALUES ($1, $2, $3, $4)",
-      ["text", metadata.title || null, body, contentHash]
+    // 同概念、同正文哈希已有 source 记录时跳过，避免重复来源行。
+    const dup = await client.query(
+      "SELECT 1 FROM sources WHERE content_hash = $1 AND concept_id = $2 LIMIT 1",
+      [contentHash, id]
     );
+    if (!dup.rowCount) {
+      await client.query(
+        "INSERT INTO sources (concept_id, source_type, original_name, content, content_hash) VALUES ($1, $2, $3, $4, $5)",
+        [id, "text", metadata.title || null, body, contentHash]
+      );
+    }
     await client.query(
-      "INSERT INTO concept_versions (concept_id, version_number, body_markdown, content_hash, generated_by) VALUES ($1, $2, $3, $4, $5)",
-      [id, nextVersion, body, contentHash, `human:${username}`]
+      "INSERT INTO concept_versions (concept_id, version_number, title, description, category, tags, status, type, body_markdown, content_hash, generated_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+      [id, nextVersion, metadata.title, metadata.description, metadata.category, metadata.tags, metadata.status, metadata.type, body, contentHash, `human:${username}`]
     );
     await client.query(
       "UPDATE concepts SET current_version = $2, title = $3, description = $4, category = $5, tags = $6, type = $7, status = $8, updated_at = now() WHERE id = $1",
@@ -320,6 +356,7 @@ export interface ExportConcept {
   content_hash: string;
   generated_by: string | null;
   updated_at: string;
+  version_created_at: string;
 }
 
 export async function listConceptsForExport(): Promise<ExportConcept[]> {
@@ -327,7 +364,7 @@ export async function listConceptsForExport(): Promise<ExportConcept[]> {
     SELECT
       c.id, c.type, c.title, c.description, c.category, c.status, c.tags,
       c.current_version, c.updated_at,
-      v.body_markdown, v.content_hash, v.generated_by
+      v.body_markdown, v.content_hash, v.generated_by, v.created_at AS version_created_at
     FROM concepts c
     JOIN concept_versions v
       ON v.concept_id = c.id AND v.version_number = c.current_version

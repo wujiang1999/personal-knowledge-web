@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
+import { getSessionSecret } from "@/lib/config";
 
 const PUBLIC_PATHS = ["/login"];
 const LOGIN_API = "/api/auth/login";
@@ -8,7 +9,9 @@ async function isValidSession(req: NextRequest): Promise<boolean> {
   const token = req.cookies.get("session")?.value;
   if (!token) return false;
   try {
-    await jwtVerify(token, new TextEncoder().encode(process.env.SESSION_SECRET ?? ""));
+    // Fail fast on a missing SESSION_SECRET instead of silently verifying
+    // with an empty key (which would disagree with the server-side helpers).
+    await jwtVerify(token, getSessionSecret());
     return true;
   } catch {
     return false;

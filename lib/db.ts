@@ -9,6 +9,12 @@ export function getPool(): Pool {
     globalForDb.pgPool = new Pool({
       connectionString: getDatabaseUrl(),
       max: 5,
+      statement_timeout: 10_000, // kill slow queries instead of hanging requests
+    });
+    // Without a listener, an idle-client connection reset (e.g. a tunnel blip
+    // on the ECS host) throws an uncaught error and crashes the process.
+    globalForDb.pgPool.on("error", (err) => {
+      console.error("Unexpected error on idle pg client", err);
     });
   }
   return globalForDb.pgPool;

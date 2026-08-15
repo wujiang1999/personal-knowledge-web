@@ -54,11 +54,9 @@ function DirectoryTree({ roots, rootConcepts }: { roots: CategoryTreeNode[]; roo
 
 export default async function DashboardPage() {
   await requireUser();
-  const [allConcepts, recent, sources] = await Promise.all([
-    listConcepts(),
-    listConcepts({ limit: 10 }),
-    listSources(),
-  ]);
+  const [allConcepts, sources] = await Promise.all([listConcepts(), listSources()]);
+  // listConcepts orders by updated_at DESC, so the top 10 are the most recent.
+  const recent = allConcepts.slice(0, 10);
 
   const stats = [
     { label: "知识条目", value: allConcepts.length },

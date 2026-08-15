@@ -7,7 +7,9 @@ loadEnv();
 async function main() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
   const username = process.env.ADMIN_USERNAME ?? "admin";
-  const password = process.env.ADMIN_PASSWORD ?? "990327";
+  // No fallback: a known default password would defeat the whole point.
+  const password = process.env.ADMIN_PASSWORD;
+  if (!password) throw new Error("ADMIN_PASSWORD is not set — set it in .env before running db:seed");
 
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
   const hash = await bcrypt.hash(password, 12);

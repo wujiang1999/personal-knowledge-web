@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { addConceptVersion, deleteConcept, getConceptDetail, type ConceptInput } from "@/lib/concepts";
+import { addConceptVersion, deleteConcept, getConceptDetail, NotFoundError, type ConceptInput } from "@/lib/concepts";
 import { requireApiUser } from "@/lib/requireUser";
 
 const updateSchema = z.object({
@@ -56,7 +56,7 @@ export async function PATCH(
     const result = await addConceptVersion(id, input, user.username);
     return NextResponse.json({ version: result.version, created: result.created });
   } catch (err) {
-    if (err instanceof Error && err.message === "Concept not found") {
+    if (err instanceof NotFoundError) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     throw err;

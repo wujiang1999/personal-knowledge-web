@@ -71,6 +71,7 @@ export function ConceptForm({
     if (mode === "edit" && data.created === false) {
       setError("");
       setNotice("正文没有变化，未生成新版本；标题 / 标签等元信息已保存。");
+      router.refresh(); // 让服务端组件重新渲染，标题/标签等元信息立即更新
       return;
     }
 

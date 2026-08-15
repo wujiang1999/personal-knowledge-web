@@ -34,11 +34,10 @@ function buildFrontmatter(c: ExportConcept): Record<string, unknown> {
   fm.status = c.status;
   fm.generated = {
     by: c.generated_by ?? `human:user`,
-    at: c.updated_at,
+    // The current version's created_at — not concepts.updated_at, which would
+    // advance past the version's date after a metadata-only edit.
+    at: c.version_created_at,
   };
-  if (c.status === "stable") {
-    fm.verified = [{ by: c.generated_by ?? "human:user", at: c.updated_at }];
-  }
   fm.kb = {
     id: c.id,
     version: c.current_version,
@@ -62,19 +61,27 @@ export function conceptToMarkdown(c: ExportConcept): { path: string; content: st
   return { path, content };
 }
 
+/** Latest version creation time across concepts, or null when the KB is empty. */
+function latestChangeAt(concepts: ExportConcept[]): string | null {
+  let latest: string | null = null;
+  for (const c of concepts) {
+    // ISO-8601 strings from pg timestamptz compare lexicographically.
+    if (!latest || c.version_created_at > latest) latest = c.version_created_at;
+  }
+  return latest;
+}
+
 export function buildIndex(concepts: ExportConcept[]): string {
   const lines: string[] = [
     "---",
     'okf_version: "0.2"',
     'title: "Personal Knowledge Base"',
-    `exported_at: "${new Date().toISOString()}"`,
-    "---",
-    "",
-    "# Personal Knowledge Base",
-    "",
-    `Exported ${concepts.length} concept(s).`,
-    "",
   ];
+  // Deterministic timestamp (max version created_at) so identical DB state
+  // produces byte-identical exports; omit when the KB is empty.
+  const latest = latestChangeAt(concepts);
+  if (latest) lines.push(`exported_at: "${latest}"`);
+  lines.push("---", "", "# Personal Knowledge Base", "", `Exported ${concepts.length} concept(s).`, "");
   for (const c of concepts) {
     const dir = typeToDir(c.type, c.status);
     const filename = `${slugify(c.title)}-${c.id.slice(0, 8)}.md`;
@@ -84,7 +91,14 @@ export function buildIndex(concepts: ExportConcept[]): string {
 }
 
 export function buildLog(concepts: ExportConcept[]): string {
-  return ["# Change Log", "", `- ${new Date().toISOString()} exported ${concepts.length} concept(s)`, ""].join("\n");
+  const lines = ["# Change Log", ""];
+  const entries = [...concepts].sort(
+    (a, b) => new Date(b.version_created_at).getTime() - new Date(a.version_created_at).getTime()
+  );
+  for (const c of entries) {
+    lines.push(`- ${c.version_created_at} v${c.current_version} ${c.title} (${c.type})`);
+  }
+  return lines.join("\n") + "\n";
 }
 
 export async function buildOkfZip(

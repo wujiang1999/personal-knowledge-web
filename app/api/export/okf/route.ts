@@ -3,6 +3,9 @@ import { listConceptsForExport } from "@/lib/concepts";
 import { buildOkfZip } from "@/lib/okf";
 import { requireApiUser } from "@/lib/requireUser";
 
+// The exporter uses jszip + Buffer, which need the Node runtime (not Edge).
+export const runtime = "nodejs";
+
 export async function GET() {
   const user = await requireApiUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -11,7 +14,8 @@ export async function GET() {
   const zipBuffer = await buildOkfZip(concepts, user.username);
 
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-  return new NextResponse(zipBuffer as unknown as BodyInit, {
+  // Uint8Array (not Buffer) so the body type-checks against DOM BodyInit.
+  return new NextResponse(new Uint8Array(zipBuffer), {
     headers: {
       "Content-Type": "application/zip",
       "Content-Disposition": `attachment; filename="okf-export-${stamp}.zip"`,
