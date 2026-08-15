@@ -51,8 +51,8 @@ export async function PATCH(
   };
 
   try {
-    const version = await addConceptVersion(id, input, user.username);
-    return NextResponse.json({ version });
+    const result = await addConceptVersion(id, input, user.username);
+    return NextResponse.json({ version: result.version, created: result.created });
   } catch (err) {
     if (err instanceof Error && err.message === "Concept not found") {
       return NextResponse.json({ error: "Not found" }, { status: 404 });

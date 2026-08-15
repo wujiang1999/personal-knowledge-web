@@ -154,22 +154,51 @@ export async function createConcept(input: ConceptInput, username: string): Prom
   }
 }
 
+export interface SaveResult {
+  version: number;
+  created: boolean;
+}
+
 export async function addConceptVersion(
   id: string,
   input: ConceptInput,
   username: string
-): Promise<number> {
+): Promise<SaveResult> {
   const body = input.body;
   const contentHash = sha256Hex(body);
+  const metadata = {
+    title: input.title.trim(),
+    description: input.description?.trim() || null,
+    tags: input.tags?.map((t) => t.trim()).filter(Boolean) ?? [],
+    type: input.type.trim() || "Note",
+    status: input.status ?? "stable",
+  };
+
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
-    const cur = await client.query("SELECT current_version FROM concepts WHERE id = $1 FOR UPDATE", [id]);
+    const cur = await client.query(
+      "SELECT c.current_version, v.content_hash FROM concepts c JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version WHERE c.id = $1 FOR UPDATE",
+      [id]
+    );
     if (cur.rows.length === 0) throw new Error("Concept not found");
-    const nextVersion = (cur.rows[0].current_version as number) + 1;
+    const currentVersion = cur.rows[0].current_version as number;
+    const currentHash = cur.rows[0].content_hash as string;
+
+    if (contentHash === currentHash) {
+      // 正文未变化：只更新元信息，不新增版本、不新增来源
+      await client.query(
+        "UPDATE concepts SET title = $2, description = $3, tags = $4, type = $5, status = $6, updated_at = now() WHERE id = $1",
+        [id, metadata.title, metadata.description, metadata.tags, metadata.type, metadata.status]
+      );
+      await client.query("COMMIT");
+      return { version: currentVersion, created: false };
+    }
+
+    const nextVersion = currentVersion + 1;
     await client.query(
       "INSERT INTO sources (source_type, original_name, content, content_hash) VALUES ($1, $2, $3, $4)",
-      ["text", input.title.trim() || null, body, contentHash]
+      ["text", metadata.title || null, body, contentHash]
     );
     await client.query(
       "INSERT INTO concept_versions (concept_id, version_number, body_markdown, content_hash, generated_by) VALUES ($1, $2, $3, $4, $5)",
@@ -177,10 +206,10 @@ export async function addConceptVersion(
     );
     await client.query(
       "UPDATE concepts SET current_version = $2, title = $3, description = $4, tags = $5, type = $6, status = $7, updated_at = now() WHERE id = $1",
-      [id, nextVersion, input.title.trim(), input.description?.trim() || null, input.tags?.map((t) => t.trim()).filter(Boolean) ?? [], input.type.trim() || "Note", input.status ?? "stable"]
+      [id, nextVersion, metadata.title, metadata.description, metadata.tags, metadata.type, metadata.status]
     );
     await client.query("COMMIT");
-    return nextVersion;
+    return { version: nextVersion, created: true };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;

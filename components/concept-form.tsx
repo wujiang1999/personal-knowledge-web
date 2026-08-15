@@ -27,6 +27,7 @@ export function ConceptForm({
 }) {
   const router = useRouter();
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -61,6 +62,13 @@ export function ConceptForm({
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       setError(data.error ?? "保存失败");
+      return;
+    }
+
+    const data = await res.json().catch(() => ({}));
+    if (mode === "edit" && data.created === false) {
+      setError("");
+      setNotice("正文没有变化，未生成新版本；标题 / 标签等元信息已保存。");
       return;
     }
 
@@ -132,6 +140,7 @@ export function ConceptForm({
       </div>
 
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {notice && <p className="text-sm text-blue-600 dark:text-blue-400">{notice}</p>}
 
       <div className="flex gap-2">
         <button
