@@ -189,6 +189,11 @@ export async function addConceptVersion(
   }
 }
 
+export async function deleteConcept(id: string): Promise<boolean> {
+  const res = await query("DELETE FROM concepts WHERE id = $1 RETURNING id", [id]);
+  return (res.rowCount ?? 0) > 0;
+}
+
 export interface Source {
   id: string;
   source_type: string;

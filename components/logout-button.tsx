@@ -14,7 +14,7 @@ export function LogoutButton() {
   return (
     <button
       onClick={logout}
-      className="rounded-md px-2 py-1 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
+      className="rounded-md px-2 py-1 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
     >
       退出
     </button>

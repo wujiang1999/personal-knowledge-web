@@ -6,10 +6,13 @@ export const metadata: Metadata = {
   description: "个人知识库 · OKF v0.2 导出",
 };
 
+const themeInitScript = `(function(){try{var t=localStorage.getItem('theme');var d=t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(d){document.documentElement.classList.add('dark')}}catch(e){}})();`;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="zh-CN">
-      <body className="min-h-screen bg-zinc-100 text-zinc-900 antialiased">
+    <html lang="zh-CN" suppressHydrationWarning>
+      <body className="min-h-screen bg-zinc-100 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         {children}
       </body>
     </html>

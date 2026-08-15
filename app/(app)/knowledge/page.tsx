@@ -20,30 +20,36 @@ export default async function KnowledgePage({
             name="q"
             defaultValue={query ?? ""}
             placeholder="搜索知识（标题 / 正文 / 标签）…"
-            className="w-full max-w-md rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500"
+            className="w-full max-w-md rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500"
           />
-          <button type="submit" className="rounded-md bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700">
+          <button
+            type="submit"
+            className="rounded-md bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+          >
             搜索
           </button>
           {query && (
-            <Link href="/knowledge" className="rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-50">
+            <Link
+              href="/knowledge"
+              className="rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
               清除
             </Link>
           )}
         </form>
         <Link
           href="/knowledge/new"
-          className="shrink-0 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700"
+          className="shrink-0 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
         >
           + 新建
         </Link>
       </div>
 
-      {query && <p className="text-sm text-zinc-500">“{query}” 的搜索结果：{results.length} 条</p>}
+      {query && <p className="text-sm text-zinc-500 dark:text-zinc-400">“{query}” 的搜索结果：{results.length} 条</p>}
 
-      <ul className="divide-y rounded-lg border border-zinc-200 bg-white">
+      <ul className="divide-y rounded-lg border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
         {results.length === 0 && (
-          <li className="px-4 py-8 text-center text-sm text-zinc-400">
+          <li className="px-4 py-8 text-center text-sm text-zinc-400 dark:text-zinc-500">
             {query ? "没有匹配的结果" : "还没有知识条目，点击「新建」开始"}
           </li>
         )}
@@ -52,12 +58,12 @@ export default async function KnowledgePage({
             <Link href={`/knowledge/${c.id}`} className="group block">
               <div className="flex items-center gap-2">
                 <span className="font-medium group-hover:underline">{c.title}</span>
-                <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500">{c.type}</span>
-                <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500">v{c.current_version}</span>
+                <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">{c.type}</span>
+                <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">v{c.current_version}</span>
               </div>
-              {c.description && <p className="mt-0.5 text-sm text-zinc-500 line-clamp-1">{c.description}</p>}
+              {c.description && <p className="mt-0.5 text-sm text-zinc-500 line-clamp-1 dark:text-zinc-400">{c.description}</p>}
               {"body_markdown" in c && (
-                <p className="mt-1 text-sm text-zinc-400 line-clamp-2">{(c as { body_markdown: string }).body_markdown}</p>
+                <p className="mt-1 text-sm text-zinc-400 line-clamp-2 dark:text-zinc-500">{(c as { body_markdown: string }).body_markdown}</p>
               )}
             </Link>
           </li>

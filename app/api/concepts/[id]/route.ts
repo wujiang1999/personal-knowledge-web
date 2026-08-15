@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { addConceptVersion, getConceptDetail, type ConceptInput } from "@/lib/concepts";
+import { addConceptVersion, deleteConcept, getConceptDetail, type ConceptInput } from "@/lib/concepts";
 import { requireApiUser } from "@/lib/requireUser";
 
 const updateSchema = z.object({
@@ -59,4 +59,17 @@ export async function PATCH(
     }
     throw err;
   }
+}
+
+export async function DELETE(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const user = await requireApiUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { id } = await params;
+  const ok = await deleteConcept(id);
+  if (!ok) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  return NextResponse.json({ ok: true });
 }
