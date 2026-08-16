@@ -62,6 +62,7 @@ export default async function ConceptDetailPage({
               type: concept.type,
               title: concept.title,
               description: concept.description ?? "",
+              category: concept.category ?? "",
               tags: concept.tags,
               status: concept.status,
               body: current?.body_markdown ?? "",
