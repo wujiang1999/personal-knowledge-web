@@ -59,30 +59,31 @@ export function normalizeCategory(input?: string | null): string | null {
   return segs.length ? segs.join("/") : null;
 }
 
-export async function listConcepts(opts?: {
+export async function listConcepts(opts: {
+  ownerId: string;
   status?: string;
   category?: string;
   limit?: number;
   offset?: number;
 }): Promise<Concept[]> {
-  const params: unknown[] = [];
-  const where: string[] = [];
-  if (opts?.status) {
+  const params: unknown[] = [opts.ownerId];
+  const where: string[] = ["owner_id = $1"];
+  if (opts.status) {
     params.push(opts.status);
     where.push(`status = $${params.length}`);
   }
-  if (opts?.category) {
+  if (opts.category) {
     params.push(opts.category);
     where.push(`(category = $${params.length} OR category LIKE $${params.length} || '/%')`);
   }
   let sql = "SELECT * FROM concepts";
   if (where.length) sql += " WHERE " + where.join(" AND ");
   sql += " ORDER BY updated_at DESC";
-  if (opts?.limit) {
+  if (opts.limit) {
     params.push(opts.limit);
     sql += ` LIMIT $${params.length}`;
   }
-  if (opts?.offset) {
+  if (opts.offset) {
     params.push(opts.offset);
     sql += ` OFFSET $${params.length}`;
   }
@@ -140,8 +141,11 @@ export function buildCategoryTree(concepts: Concept[]): {
   return { rootConcepts, roots };
 }
 
-export async function getConceptDetail(id: string): Promise<ConceptDetail | null> {
-  const { rows } = await query<Concept>("SELECT * FROM concepts WHERE id = $1", [id]);
+export async function getConceptDetail(id: string, ownerId: string): Promise<ConceptDetail | null> {
+  const { rows } = await query<Concept>(
+    "SELECT * FROM concepts WHERE id = $1 AND owner_id = $2",
+    [id, ownerId]
+  );
   if (rows.length === 0) return null;
   const concept = rows[0];
   const versions = await query<ConceptVersion>(
@@ -156,7 +160,7 @@ export interface SearchResult extends Concept {
   score: number;
 }
 
-export async function searchConcepts(q: string, limit = 20): Promise<SearchResult[]> {
+export async function searchConcepts(ownerId: string, q: string, limit = 20): Promise<SearchResult[]> {
   const needle = q.trim().slice(0, 200);
   if (!needle) return [];
 
@@ -193,22 +197,24 @@ export async function searchConcepts(q: string, limit = 20): Promise<SearchResul
     JOIN concept_versions v
       ON v.concept_id = c.id AND v.version_number = c.current_version
     WHERE (
-      ${ftsWhere}
-      v.body_markdown ILIKE $2
-      OR c.title ILIKE $2
-      OR c.description ILIKE $2
-      OR c.title % $1
-      OR similarity(v.body_markdown, $1) > 0.05
+      c.owner_id = $4 AND (
+        ${ftsWhere}
+        v.body_markdown ILIKE $2
+        OR c.title ILIKE $2
+        OR c.description ILIKE $2
+        OR c.title % $1
+        OR similarity(v.body_markdown, $1) > 0.05
+      )
     )
     ORDER BY score DESC, c.updated_at DESC
     LIMIT $3
   `;
 
-  const { rows } = await query<SearchResult>(sql, [needle, like, limit]);
+  const { rows } = await query<SearchResult>(sql, [needle, like, limit, ownerId]);
   return rows;
 }
 
-export async function createConcept(input: ConceptInput, username: string): Promise<string> {
+export async function createConcept(input: ConceptInput, user: { id: string; username: string }): Promise<string> {
   const body = input.body;
   const contentHash = sha256Hex(body);
   const type = input.type.trim() || "Note";
@@ -222,8 +228,8 @@ export async function createConcept(input: ConceptInput, username: string): Prom
   try {
     await client.query("BEGIN");
     const inserted = await client.query(
-      "INSERT INTO concepts (type, title, description, category, tags, status) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
-      [type, title, description, category, tags, status]
+      "INSERT INTO concepts (owner_id, type, title, description, category, tags, status) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+      [user.id, type, title, description, category, tags, status]
     );
     const conceptId = inserted.rows[0].id as string;
     // Raw-input traceability: link the source back to the new concept.
@@ -234,7 +240,7 @@ export async function createConcept(input: ConceptInput, username: string): Prom
     // Version 1 carries a metadata snapshot so past versions stay reconstructable.
     await client.query(
       "INSERT INTO concept_versions (concept_id, version_number, title, description, category, tags, status, type, body_markdown, content_hash, generated_by) VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-      [conceptId, title, description, category, tags, status, type, body, contentHash, `human:${username}`]
+      [conceptId, title, description, category, tags, status, type, body, contentHash, `human:${user.username}`]
     );
     await client.query("COMMIT");
     return conceptId;
@@ -323,8 +329,8 @@ export async function addConceptVersion(
   }
 }
 
-export async function deleteConcept(id: string): Promise<boolean> {
-  const res = await query("DELETE FROM concepts WHERE id = $1 RETURNING id", [id]);
+export async function deleteConcept(id: string, ownerId: string): Promise<boolean> {
+  const res = await query("DELETE FROM concepts WHERE id = $1 AND owner_id = $2 RETURNING id", [id, ownerId]);
   return (res.rowCount ?? 0) > 0;
 }
 
@@ -336,9 +342,14 @@ export interface Source {
   created_at: string;
 }
 
-export async function listSources(): Promise<Source[]> {
+export async function listSources(ownerId: string): Promise<Source[]> {
   const { rows } = await query<Source>(
-    "SELECT id, source_type, original_name, content_hash, created_at FROM sources ORDER BY created_at DESC LIMIT 200"
+    `SELECT s.id, s.source_type, s.original_name, s.content_hash, s.created_at
+     FROM sources s
+     JOIN concepts c ON c.id = s.concept_id
+     WHERE c.owner_id = $1
+     ORDER BY s.created_at DESC LIMIT 200`,
+    [ownerId]
   );
   return rows;
 }
@@ -359,7 +370,7 @@ export interface ExportConcept {
   version_created_at: string;
 }
 
-export async function listConceptsForExport(): Promise<ExportConcept[]> {
+export async function listConceptsForExport(ownerId: string): Promise<ExportConcept[]> {
   const { rows } = await query<ExportConcept>(`
     SELECT
       c.id, c.type, c.title, c.description, c.category, c.status, c.tags,
@@ -368,7 +379,8 @@ export async function listConceptsForExport(): Promise<ExportConcept[]> {
     FROM concepts c
     JOIN concept_versions v
       ON v.concept_id = c.id AND v.version_number = c.current_version
+    WHERE c.owner_id = $1
     ORDER BY c.updated_at DESC
-  `);
+  `, [ownerId]);
   return rows;
 }

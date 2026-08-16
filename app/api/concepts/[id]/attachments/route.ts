@@ -20,6 +20,8 @@ export async function GET(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
+  const owned = await query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [id, user.id]);
+  if (!owned.rowCount) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const attachments = await listAttachments(id);
   return NextResponse.json({ attachments });
 }
@@ -37,7 +39,7 @@ export async function PUT(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
-  const found = await query("SELECT 1 FROM concepts WHERE id = $1", [id]);
+  const found = await query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [id, user.id]);
   if (!found.rowCount) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   if (!req.body) return NextResponse.json({ error: "missing body" }, { status: 400 });

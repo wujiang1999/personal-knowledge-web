@@ -10,6 +10,6 @@ export async function GET(req: Request) {
   const q = searchParams.get("q") ?? "";
   const k = Math.max(3, Math.min(50, Number(searchParams.get("k") ?? 20) || 20));
 
-  const results = await searchConcepts(q, k);
+  const results = await searchConcepts(user.id, q, k);
   return NextResponse.json({ results });
 }

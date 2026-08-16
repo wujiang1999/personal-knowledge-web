@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS users (
 -- -------------------------------
 CREATE TABLE IF NOT EXISTS concepts (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id        uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   type            text NOT NULL,
   title           text NOT NULL,
   description     text,

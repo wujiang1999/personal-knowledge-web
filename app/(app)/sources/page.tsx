@@ -2,8 +2,8 @@ import { requireUser } from "@/lib/requireUser";
 import { listSources } from "@/lib/concepts";
 
 export default async function SourcesPage() {
-  await requireUser();
-  const sources = await listSources();
+  const user = await requireUser();
+  const sources = await listSources(user.id);
 
   return (
     <div className="space-y-6">

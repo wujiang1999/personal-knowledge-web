@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { requireApiUser } from "@/lib/requireUser";
+import { query } from "@/lib/db";
 import {
   attachmentFilePath,
   deleteAttachmentFile,
@@ -31,6 +32,9 @@ export async function GET(
   const { id } = await params;
   const att = await getAttachment(id);
   if (!att) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const owned = await query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [att.concept_id, user.id]);
+  if (!owned.rowCount) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const download = new URL(req.url).searchParams.get("download") === "1";
   const contentType = safeContentType(att.mime_type);
@@ -100,8 +104,14 @@ export async function DELETE(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
-  const att = await deleteAttachmentRecord(id);
+  const att = await getAttachment(id);
   if (!att) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  await deleteAttachmentFile(att.storage_key);
+
+  const owned = await query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [att.concept_id, user.id]);
+  if (!owned.rowCount) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const deleted = await deleteAttachmentRecord(id);
+  if (!deleted) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  await deleteAttachmentFile(deleted.storage_key);
   return NextResponse.json({ ok: true });
 }

@@ -9,7 +9,7 @@ export default async function KnowledgePage({
 }: {
   searchParams: Promise<{ q?: string; category?: string; page?: string }>;
 }) {
-  await requireUser();
+  const user = await requireUser();
   const { q, category, page: pageParam } = await searchParams;
   const query = q?.trim();
   const page = Math.max(1, Number(pageParam) || 1);
@@ -18,10 +18,11 @@ export default async function KnowledgePage({
   let hasMore = false;
   if (query) {
     // Search is already ranked and capped at 50; paginating it is a follow-up.
-    results = await searchConcepts(query, 50);
+    results = await searchConcepts(user.id, query, 50);
   } else {
     // Fetch one extra row to detect "has more", then slice to the page.
     const fetched = await listConcepts({
+      ownerId: user.id,
       category: category?.trim() || undefined,
       limit: PAGE_SIZE + 1,
       offset: (page - 1) * PAGE_SIZE,

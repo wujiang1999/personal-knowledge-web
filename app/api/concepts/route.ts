@@ -22,7 +22,7 @@ export async function GET(req: Request) {
   const rawOffset = Number(url.searchParams.get("offset"));
   const limit = Number.isFinite(rawLimit) ? Math.min(200, Math.max(1, Math.trunc(rawLimit))) : 100;
   const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.trunc(rawOffset)) : 0;
-  const concepts = await listConcepts({ limit, offset });
+  const concepts = await listConcepts({ ownerId: user.id, limit, offset });
   return NextResponse.json({ concepts });
 }
 
@@ -46,6 +46,6 @@ export async function POST(req: Request) {
     status: body.status,
     body: body.body,
   };
-  const id = await createConcept(input, user.username);
+  const id = await createConcept(input, user);
   return NextResponse.json({ id }, { status: 201 });
 }
