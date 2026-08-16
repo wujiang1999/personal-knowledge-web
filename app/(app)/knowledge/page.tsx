@@ -109,16 +109,18 @@ export default async function KnowledgePage({
         ))}
       </ul>
 
-      {!query && page > 1 && (
+      {!query && (page > 1 || hasMore) && (
         <div className="flex items-center justify-between text-sm">
           <span className="text-zinc-500 dark:text-zinc-400">第 {page} 页</span>
           <div className="flex gap-2">
-            <Link
-              href={hrefFor(page - 1)}
-              className="rounded-md border border-zinc-300 px-3 py-1.5 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-            >
-              ← 上一页
-            </Link>
+            {page > 1 && (
+              <Link
+                href={hrefFor(page - 1)}
+                className="rounded-md border border-zinc-300 px-3 py-1.5 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                ← 上一页
+              </Link>
+            )}
             {hasMore && (
               <Link
                 href={hrefFor(page + 1)}

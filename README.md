@@ -30,11 +30,13 @@
 ```
 app/                  # 页面（登录、概览、知识、来源、设置）与 API 路由
 components/           # 客户端表单与登录组件
-lib/                  # 认证、数据库访问、概念 CRUD、搜索、OKF 导出
+lib/                  # 认证、数据库访问、概念 CRUD、搜索、OKF 导出、附件
 db/schema.sql         # 数据库 schema（含 pg_trgm、tsvector 触发器、索引）
-scripts/migrate.ts    # 应用 schema
+scripts/migrate.ts    # 应用 schema（幂等迁移 runner）
 scripts/seed.ts       # 创建默认管理员（幂等，不覆盖已修改的密码）
 middleware.ts         # 登录保护与重定向
+tests/                # Vitest 单元测试（限流 / 搜索转义 / OKF / 附件 MIME 校验）
+.github/workflows/ci.yml  # CI：typecheck + lint + test + build
 ```
 
 ## 数据库 schema
@@ -71,11 +73,23 @@ npm start            # 运行生产构建
 
 > 本地访问实例上的数据库需先将 `DATABASE_URL` 指向可连通的地址（端口转发/隧道/公网 IP）。
 
+## 质量检查（提交前跑一遍）
+
+```bash
+npm run typecheck   # tsc --noEmit
+npm run lint        # ESLint（eslint-config-next）
+npm test            # Vitest 单元测试（限流 / LIKE 转义 / OKF / 附件 MIME）
+npm run build       # 生产构建（等价于部署时执行）
+npm run format      # Prettier（可选，格式化全库）
+```
+
+CI（`.github/workflows/ci.yml`）在 push/PR 时自动执行以上四步（typecheck/lint/test/build）。
+
 ## 部署到 ECS（自托管）
 
 应用以 systemd 服务 `personal-knowledge-web` 运行在 ECS 实例的 `/root/personal-knowledge-web`，监听 `0.0.0.0:3000`。
 
-更新代码并重启（二选一）：
+更新代码并部署（二选一）：
 
 ```bash
 # 方式一：在实例上直接执行
@@ -85,7 +99,13 @@ bash /root/personal-knowledge-web/deploy.sh
 workbench exec -i i-j6c698asus1j5de5d66d -c 'bash /root/personal-knowledge-web/deploy.sh'
 ```
 
-`deploy.sh` 依次执行 `git pull --ff-only` → `npm run build` → `systemctl restart personal-knowledge-web`。
+`deploy.sh` 流程：记录当前 commit → `git pull --ff-only` → `npm run db:migrate`（幂等，已应用迁移为 no-op）→ `npm run build` → `systemctl restart` → 轮询 `http://127.0.0.1:3000/api/health` 探活。任一步失败自动 `git reset --hard` 回滚到上一 commit 并重启旧构建，退出码 1。
+
+> ⚠️ **生产环境必须启用 HTTPS（TLS）**。应用以明文 HTTP 直出公网时，登录只能把 `SESSION_COOKIE_SECURE` 设为 `false`，会话 Cookie 将在公网明文传输，网络路径上的中间人可直接接管会话。见下方「TLS / HTTPS」。
+
+### TLS / HTTPS
+
+应用本身不终止 TLS；建议在实例上用反向代理（Caddy 一键 `https://你的域名` 或 nginx + certbot）把 `:443` 转发到 `127.0.0.1:3000`，并保持 `SESSION_COOKIE_SECURE=true`。没有域名时可用 Cloudflare Tunnel 为公网 IP 提供 HTTPS。不要以明文 HTTP 长期直出公网。
 
 ## 用户管理
 
@@ -126,13 +146,11 @@ NEW_USERNAME=alice NEW_PASSWORD=xxx RESET=1 npm run db:add-user
 
 ### ⚠️ 关键：数据库网络连通性
 
-数据库部署在**无公网 IP** 的 ECS 实例上，Vercel 的云函数无法直连私有 IP。要让生产环境可访问，需任选其一：
+数据库部署在 ECS 实例上（该实例拥有公网 IP `47.238.107.150`，安全组已放行 `5432`）。要让外部环境（如 Vercel）可访问，任选其一：
 
-- **绑定公网 IP（EIP）**：给实例分配 EIP，并在阿里云安全组放行 `5432` 端口，同时实例上 `firewalld` 放行该端口；`DATABASE_URL` 指向 EIP。
+- **直接连公网 IP（不推荐）**：`DATABASE_URL` 指向 `47.238.107.150`。**把 PostgreSQL 5432 直连公网属高危暴露面**（数据库凭据一旦泄露等于全库直读/直写，绕过应用全部防护）；确需直连时必须 `?sslmode=require` 强制加密，并在安全组/防火墙尽量按来源 IP 白名单收窄。
 - **内网穿透/隧道**：Cloudflare Tunnel、frp 等，将实例 `5432` 暴露为公网 endpoint。
-- **改用云数据库**：将 `DATABASE_URL` 换成 Supabase / Neon 等托管 PostgreSQL（最省事，但需迁移数据）。
-
-启用公网访问时，数据库侧还需：`listen_addresses = '*'`（已配置）、`pg_hba.conf` 增加对应来源的 `scram-sha-256` 条目（已为内网网段配置）、以及安全组/firewalld 放行。
+- **改用云数据库（推荐）**：将 `DATABASE_URL` 换成 Supabase / Neon 等托管 PostgreSQL（托管侧自带 TLS 与访问控制，但需迁移数据）。
 
 ## 附件
 
@@ -142,6 +160,34 @@ NEW_USERNAME=alice NEW_PASSWORD=xxx RESET=1 npm run db:add-user
 - **预览**：图片（`<img>`）、PDF（`<iframe>`）、文本/代码（`<pre>`）、音视频（`<audio>`/`<video>`）原生预览；音视频支持 Range 拖动进度。其它类型走下载。
 - **鉴权**：上传 / 预览 / 下载 / 删除都走登录会话（JWT cookie），文件接口不公开。
 - **注意**：本地磁盘存储要求**应用与数据库同机部署（ECS）**。若未来迁到 Vercel，需改用对象存储（OSS 等）。
+
+## 备份与恢复
+
+个人知识库最重要的运维动作。建议在实例上配置每日定时备份（`crontab`）：
+
+```bash
+# /root/backup-knowledge.sh
+#!/bin/bash
+set -euo pipefail
+set -a; source /root/personal-knowledge-web/.env; set +a
+STAMP=$(date +%F_%H%M)
+mkdir -p /root/backups
+pg_dump "$DATABASE_URL" -Fc -f /root/backups/knowledge-$STAMP.dump
+tar -C /root/personal-knowledge-web -czf /root/backups/attachments-$STAMP.tar.gz data/attachments
+find /root/backups -name '*.dump' -mtime +14 -delete
+find /root/backups -name '*.tar.gz' -mtime +14 -delete
+echo "backup ok: $STAMP"
+```
+
+恢复：
+
+```bash
+pg_restore --clean --if-exists -d "$DATABASE_URL" /root/backups/knowledge-<日期>.dump
+tar -C /root/personal-knowledge-web -xzf /root/backups/attachments-<日期>.tar.gz
+systemctl restart personal-knowledge-web
+```
+
+> 示例含完整知识库（concepts / versions / sources / users）与附件字节；数据库与附件按同一时间戳归档才能保持一致。
 
 ## OKF 导出说明
 
@@ -174,3 +220,6 @@ NEW_USERNAME=alice NEW_PASSWORD=xxx RESET=1 npm run db:add-user
 - 会话为 JWT（httpOnly cookie，7 天）；改密会提升 `token_version` 使旧会话立即失效。
 - 登录有内存限流（同一用户名 15 分钟内连续失败 5 次即锁定 15 分钟）。
 - 生产环境启用安全响应头（CSP、`X-Frame-Options: DENY`、`nosniff` 等），所有 `/api/*` 响应 `Cache-Control: no-store`。
+- **附件上传做 magic-bytes 内容校验**：声明为位图/PDF 但内容不符会上传失败；SVG / XML / HTML 等可执行格式一律降级为 `application/octet-stream` 强制下载、**永不内联渲染**，防止存储型 XSS。
+- **公网部署必须启用 TLS**（反代终止 HTTPS，保持 `SESSION_COOKIE_SECURE=true`）；不要明文 HTTP 直出公网（会话 Cookie 会被中间人窃取）。
+- `/api/health` 为无需登录的健康检查端点（仅返回 `{ok, db}`，不含任何数据），供 deploy.sh 与监控探活。

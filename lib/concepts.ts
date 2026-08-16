@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { getPool, query } from "./db";
+import { deleteAttachmentFile } from "./attachments";
 
 /** Thrown when a concept lookup by id finds no row (typed 404, not string-match). */
 export class NotFoundError extends Error {}
@@ -57,6 +58,11 @@ export function normalizeCategory(input?: string | null): string | null {
     .map((s) => s.trim())
     .filter(Boolean);
   return segs.length ? segs.join("/") : null;
+}
+
+/** Escape LIKE metacharacters so user input can never act as a wildcard. */
+export function escapeLike(needle: string): string {
+  return needle.replace(/[\\%_]/g, (m) => "\\" + m);
 }
 
 export async function listConcepts(opts: {
@@ -166,7 +172,7 @@ export async function searchConcepts(ownerId: string, q: string, limit = 20): Pr
 
   // Escape LIKE metacharacters — % and _ are user-controllable wildcards.
   // Passed as its own parameter ($2) so similarity/FTS still see the raw $1.
-  const like = "%" + needle.replace(/[\\%_]/g, (m) => "\\" + m) + "%";
+  const like = "%" + escapeLike(needle) + "%";
 
   // 'simple' FTS treats a CJK run as one lexeme, so a Chinese query can never
   // match content_tsv. Only enter the FTS branch for ASCII tokens; Chinese
@@ -330,8 +336,40 @@ export async function addConceptVersion(
 }
 
 export async function deleteConcept(id: string, ownerId: string): Promise<boolean> {
-  const res = await query("DELETE FROM concepts WHERE id = $1 AND owner_id = $2 RETURNING id", [id, ownerId]);
-  return (res.rowCount ?? 0) > 0;
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    // Ownership check inside the same transaction that deletes (no TOCTOU),
+    // and collect attachment disk keys before the CASCADE wipes the rows.
+    const owned = await client.query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [id, ownerId]);
+    if (owned.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+    const atts = await client.query<{ storage_key: string }>(
+      "SELECT storage_key FROM attachments WHERE concept_id = $1",
+      [id]
+    );
+    const res = await client.query(
+      "DELETE FROM concepts WHERE id = $1 AND owner_id = $2 RETURNING id",
+      [id, ownerId]
+    );
+    await client.query("COMMIT");
+    const deleted = (res.rowCount ?? 0) > 0;
+    // Remove disk bytes after the DB commit; any failure is logged, and the
+    // orphan is recoverable via the reconcile script.
+    if (deleted) {
+      for (const a of atts.rows) {
+        await deleteAttachmentFile(a.storage_key);
+      }
+    }
+    return deleted;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export interface Source {

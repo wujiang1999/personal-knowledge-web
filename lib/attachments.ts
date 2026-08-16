@@ -83,7 +83,13 @@ export async function saveAttachmentStream(
 }
 
 export async function deleteAttachmentFile(storageKey: string): Promise<void> {
-  await rm(attachmentFilePath(storageKey), { force: true }).catch(() => {});
+  try {
+    await rm(attachmentFilePath(storageKey), { force: true });
+  } catch (err) {
+    // Callers usually delete the DB row first; log instead of silently
+    // leaking an orphaned file (up to 100 MB each).
+    console.error("failed to delete attachment file", storageKey, err);
+  }
 }
 
 export async function attachmentStat(storageKey: string) {
@@ -145,12 +151,26 @@ export async function deleteAttachmentRecord(id: string): Promise<Attachment | n
   return rows.length ? rowToAttachment(rows[0]) : null;
 }
 
+/**
+ * MIME types that may be rendered inline in the browser without executing
+ * scripts. Deliberately excludes image/svg+xml and any `image/*+xml` (stored
+ * XSS: an SVG opened as a same-origin top-level document runs its inline
+ * <script>), image/x-icon, text/html, etc.
+ */
+const INLINE_SAFE_IMAGES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+]);
+
 /** Whether a mime type should render inline in the browser (vs. download). */
 export function isInlinePreviewable(mime: string): boolean {
   const m = (mime || "").toLowerCase();
   if (m === "text/html") return false; // never render HTML inline (XSS)
+  if (m.startsWith("image/")) return INLINE_SAFE_IMAGES.has(m);
   return (
-    m.startsWith("image/") ||
     m === "application/pdf" ||
     m.startsWith("text/") ||
     m.startsWith("audio/") ||
@@ -162,5 +182,78 @@ export function isInlinePreviewable(mime: string): boolean {
 export function safeContentType(mime: string): string {
   const m = (mime || "").toLowerCase();
   if (!m || m === "text/html") return "application/octet-stream";
+  // Any script-capable image format (SVG, XML-based, ICO, …) is served only as
+  // a download, never inline: the browser must not render it as a same-origin
+  // top-level document.
+  if (m.startsWith("image/") && !INLINE_SAFE_IMAGES.has(m)) return "application/octet-stream";
   return m;
+}
+
+// ---------- upload magic-byte validation ----------
+
+function readAscii(buf: Buffer, start: number, len: number): string {
+  return buf.subarray(start, start + len).toString("latin1");
+}
+
+/**
+ * Sniff the true type of a file from its first bytes. Supports the types we
+ * are willing to inline; returns null when the content is unrecognized.
+ */
+export function sniffMime(head: Buffer): string | null {
+  if (head.length >= 8 && head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47) {
+    return "image/png";
+  }
+  if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (head.length >= 6 && (readAscii(head, 0, 6) === "GIF87a" || readAscii(head, 0, 6) === "GIF89a")) {
+    return "image/gif";
+  }
+  if (head.length >= 12 && readAscii(head, 0, 4) === "RIFF" && readAscii(head, 8, 4) === "WEBP") {
+    return "image/webp";
+  }
+  if (head.length >= 12 && readAscii(head, 4, 4) === "ftyp" && (readAscii(head, 8, 4) === "avif" || readAscii(head, 8, 4) === "avis")) {
+    return "image/avif";
+  }
+  if (head.length >= 5 && readAscii(head, 0, 5) === "%PDF-") {
+    return "application/pdf";
+  }
+  return null;
+}
+
+const ALWAYS_DOWNLOAD = new Set(["text/html", "application/xhtml+xml", "application/xml", "image/x-icon", "image/svg+xml"]);
+
+/**
+ * Validate a client-declared MIME against the actual file header.
+ *
+ * - image/* (whitelisted bitmaps) and application/pdf: content must match the
+ *   declaration, otherwise the upload is rejected (a spoofed inline type).
+ * - script-capable types (svg/xml/html/ico) and any unrecognized image: the
+ *   stored mime is downgraded to application/octet-stream so the file can only
+ *   be downloaded, never rendered inline.
+ * - text/audio/video/octet-stream: accepted as declared (they render safely:
+ *   text as <pre>, media without a script interpreter).
+ *
+ * Returns the (possibly downgraded) mime to store, or { error } to reject.
+ */
+export function validateDeclaredMime(declared: string, head: Buffer): { mime?: string; error?: string } {
+  const m = (declared || "").toLowerCase().trim();
+  if (!m) return { mime: "application/octet-stream" };
+
+  if (ALWAYS_DOWNLOAD.has(m) || (m.startsWith("image/") && !INLINE_SAFE_IMAGES.has(m) && m !== "application/pdf")) {
+    return { mime: "application/octet-stream" };
+  }
+
+  if ((INLINE_SAFE_IMAGES.has(m) || m === "application/pdf")) {
+    const sniffed = sniffMime(head);
+    if (sniffed !== m) {
+      return { error: "file content does not match the declared type" };
+    }
+    return { mime: m };
+  }
+
+  // text/*, audio/*, video/*, application/octet-stream, and anything else:
+  if (m.startsWith("text/") && m !== "text/html") return { mime: m };
+  if (m.startsWith("audio/") || m.startsWith("video/")) return { mime: m };
+  return { mime: m };
 }

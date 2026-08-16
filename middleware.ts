@@ -4,6 +4,7 @@ import { getSessionSecret } from "@/lib/config";
 
 const PUBLIC_PATHS = ["/login"];
 const LOGIN_API = "/api/auth/login";
+const PUBLIC_API_PATHS = ["/api/health"];
 
 async function isValidSession(req: NextRequest): Promise<boolean> {
   const token = req.cookies.get("session")?.value;
@@ -22,11 +23,12 @@ export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const isPublic = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));
   const isLoginApi = pathname === LOGIN_API;
+  const isPublicApi = PUBLIC_API_PATHS.some((p) => pathname === p);
   const isApi = pathname.startsWith("/api/");
 
   const valid = await isValidSession(req);
 
-  if (!valid && !isPublic && !isLoginApi) {
+  if (!valid && !isPublic && !isPublicApi && !isLoginApi) {
     if (isApi) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }

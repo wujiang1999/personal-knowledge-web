@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
+import { open } from "node:fs/promises";
 import { query } from "@/lib/db";
 import { requireApiUser } from "@/lib/requireUser";
 import {
   AttachmentTooLargeError,
+  attachmentFilePath,
+  deleteAttachmentFile,
   insertAttachment,
   listAttachments,
   saveAttachmentStream,
+  validateDeclaredMime,
   MAX_ATTACHMENT_BYTES,
 } from "@/lib/attachments";
 
@@ -70,13 +74,36 @@ export async function PUT(
     throw err;
   }
 
+  // Post-write MIME validation: sniff the first bytes of the stored file so a
+  // spoofed X-Mime can never turn a script-capable payload (SVG/XML/HTML) into
+  // an inline-rendered attachment. Downgrade or reject as appropriate.
+  let head = Buffer.alloc(0);
+  let fh;
+  try {
+    fh = await open(attachmentFilePath(saved.storageKey), "r");
+    const buf = Buffer.alloc(4096);
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    head = buf.subarray(0, bytesRead);
+  } finally {
+    await fh?.close();
+  }
+  const validated = validateDeclaredMime(mimeType, head);
+  if (validated.error) {
+    await deleteAttachmentFile(saved.storageKey);
+    return NextResponse.json({ error: validated.error }, { status: 400 });
+  }
+
   const attachment = await insertAttachment({
     conceptId: id,
     originalName,
-    mimeType,
+    mimeType: validated.mime ?? mimeType,
     sizeBytes: saved.sizeBytes,
     storageKey: saved.storageKey,
     hash: saved.hash,
+  }).catch(async (err) => {
+    // DB row insert failed — don't leave the already-written bytes on disk.
+    await deleteAttachmentFile(saved.storageKey);
+    throw err;
   });
   return NextResponse.json({ attachment }, { status: 201 });
 }
