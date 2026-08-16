@@ -71,6 +71,22 @@ npm start            # 运行生产构建
 
 > 本地访问实例上的数据库需先将 `DATABASE_URL` 指向可连通的地址（端口转发/隧道/公网 IP）。
 
+## 部署到 ECS（自托管）
+
+应用以 systemd 服务 `personal-knowledge-web` 运行在 ECS 实例的 `/root/personal-knowledge-web`，监听 `0.0.0.0:3000`。
+
+更新代码并重启（二选一）：
+
+```bash
+# 方式一：在实例上直接执行
+bash /root/personal-knowledge-web/deploy.sh
+
+# 方式二：本地通过 workbench CLI 触发
+workbench exec -i i-j6c698asus1j5de5d66d -c 'bash /root/personal-knowledge-web/deploy.sh'
+```
+
+`deploy.sh` 依次执行 `git pull --ff-only` → `npm run build` → `systemctl restart personal-knowledge-web`。
+
 ## 用户管理
 
 账号不提供自助注册（单用户知识库，公网开放注册会暴露私有数据）。新增/重置用户由部署者通过命令行完成：
