@@ -52,7 +52,7 @@ middleware.ts         # 登录保护与重定向
 复制 `.env.example` 为 `.env` 并填写：
 
 ```bash
-DATABASE_URL=postgresql://kbapp:CHANGE_ME@127.0.0.1:5432/knowledge
+DATABASE_URL=postgresql://CHANGE_ME:CHANGE_ME@127.0.0.1:5432/knowledge
 SESSION_SECRET=CHANGE_ME          # openssl rand -hex 32
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=CHANGE_ME          # 必填；仅 seed 首次创建时使用，seed 缺省会报错
