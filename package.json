@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "db:migrate": "tsx scripts/migrate.ts",
-    "db:seed": "tsx scripts/seed.ts"
+    "db:seed": "tsx scripts/seed.ts",
+    "db:add-user": "tsx scripts/add-user.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

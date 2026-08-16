@@ -69,7 +69,34 @@ npm run build        # 生产构建
 npm start            # 运行生产构建
 ```
 
-> 本地访问实例上的数据库需先将 `DATABASE_URL` 指向可连通的地址（端口转发/隧道）。
+> 本地访问实例上的数据库需先将 `DATABASE_URL` 指向可连通的地址（端口转发/隧道/公网 IP）。
+
+## 用户管理
+
+账号不提供自助注册（单用户知识库，公网开放注册会暴露私有数据）。新增/重置用户由部署者通过命令行完成：
+
+```powershell
+# Windows PowerShell —— 新增用户
+cd E:\ECS\personal-knowledge-web
+$env:NEW_USERNAME = 'alice'
+$env:NEW_PASSWORD = '请改成强密码'
+npm run db:add-user
+
+# 重置某用户密码（并使该用户所有旧会话立即失效）
+$env:RESET = '1'
+npm run db:add-user
+```
+
+```bash
+# Linux/macOS
+NEW_USERNAME=alice NEW_PASSWORD=xxx npm run db:add-user
+NEW_USERNAME=alice NEW_PASSWORD=xxx RESET=1 npm run db:add-user
+```
+
+- 密码以 bcrypt（cost 12）哈希存储，绝不落明文。
+- 不带 `RESET=1` 时与 `db:seed` 一致：已存在的用户名会被跳过、不覆盖密码。
+- `NEW_PASSWORD` 仅在进程环境内使用；不要把它写进 `.env` 长期留存（`.env` 已 gitignore，但仍建议用完即清）。
+- 脚本读 `.env` 的 `DATABASE_URL`：在实例本地跑用 `127.0.0.1:5432`；从其它机器跑需先把 host 换成可达地址（公网 IP 或隧道）。
 
 ## 部署到 Vercel
 
