@@ -24,10 +24,15 @@ export async function createSession(user: {
     .sign(getSessionSecret());
 
   const store = await cookies();
+  // Secure by default in production; override with SESSION_COOKIE_SECURE=false
+  // only when the app is served over plain HTTP (e.g. direct public-IP access).
+  const secure = process.env.SESSION_COOKIE_SECURE !== undefined
+    ? process.env.SESSION_COOKIE_SECURE === "true"
+    : process.env.NODE_ENV === "production";
   store.set(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure,
     path: "/",
     maxAge: MAX_AGE,
   });
