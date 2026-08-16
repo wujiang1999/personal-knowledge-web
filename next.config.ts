@@ -2,6 +2,12 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  experimental: {
+    // Next.js 15.5 buffers request bodies at 10MB by default when middleware is
+    // present. Raise it so attachment uploads can stream up to our 100MB cap
+    // (app-level limit is enforced separately in lib/attachments.ts).
+    middlewareClientMaxBodySize: "110mb",
+  },
   async headers() {
     const isProd = process.env.NODE_ENV === "production";
     const securityHeaders = [
