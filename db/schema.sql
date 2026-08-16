@@ -84,7 +84,9 @@ CREATE INDEX IF NOT EXISTS idx_concepts_title_trgm ON concepts USING GIN (title 
 CREATE INDEX IF NOT EXISTS idx_concepts_desc_trgm  ON concepts USING GIN (description gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_versions_tsv        ON concept_versions USING GIN (content_tsv);
 CREATE INDEX IF NOT EXISTS idx_versions_body_trgm  ON concept_versions USING GIN (body_markdown gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_sources_concept_id  ON sources (concept_id);
+-- idx_sources_concept_id is created by db/migrations/0002 (the column is
+-- migration-added on existing databases; creating the index here would fail
+-- before 0002 runs).
 
 -- -------------------------------
 -- tsvector maintenance trigger
