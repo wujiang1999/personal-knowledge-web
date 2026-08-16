@@ -104,6 +104,14 @@ export interface CategoryTreeNode {
   children: CategoryTreeNode[];
 }
 
+/**
+ * Deterministic Chinese-aware collation. Plain a.name.localeCompare(b.name)
+ * without a locale yields platform-dependent order (Windows sorts CJK by
+ * pinyin, many Linux locales by code point), which breaks the category tree
+ * across environments and CI. Pin the collation explicitly.
+ */
+const collator = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "variant" });
+
 export function buildCategoryTree(concepts: Concept[]): {
   rootConcepts: Concept[];
   roots: CategoryTreeNode[];
@@ -135,14 +143,14 @@ export function buildCategoryTree(concepts: Concept[]): {
   }
 
   const sortNodes = (nodes: CategoryTreeNode[]) => {
-    nodes.sort((a, b) => a.name.localeCompare(b.name));
+    nodes.sort((a, b) => collator.compare(a.name, b.name));
     for (const n of nodes) {
-      n.concepts.sort((a, b) => a.title.localeCompare(b.title));
+      n.concepts.sort((a, b) => collator.compare(a.title, b.title));
       sortNodes(n.children);
     }
   };
   sortNodes(roots);
-  rootConcepts.sort((a, b) => a.title.localeCompare(b.title));
+  rootConcepts.sort((a, b) => collator.compare(a.title, b.title));
 
   return { rootConcepts, roots };
 }
