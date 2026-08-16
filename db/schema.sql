@@ -76,6 +76,20 @@ CREATE TABLE IF NOT EXISTS sources (
 );
 
 -- -------------------------------
+-- attachments (files uploaded under a concept; bytes live on local disk)
+-- -------------------------------
+CREATE TABLE IF NOT EXISTS attachments (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  concept_id    uuid NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+  original_name text NOT NULL,
+  mime_type     text NOT NULL,
+  size_bytes    bigint NOT NULL,
+  storage_key   text NOT NULL UNIQUE,   -- server-generated filename on disk
+  content_hash  text NOT NULL,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+-- -------------------------------
 -- indexes
 -- -------------------------------
 CREATE INDEX IF NOT EXISTS idx_concepts_title      ON concepts (title);
@@ -87,6 +101,7 @@ CREATE INDEX IF NOT EXISTS idx_versions_body_trgm  ON concept_versions USING GIN
 -- idx_sources_concept_id is created by db/migrations/0002 (the column is
 -- migration-added on existing databases; creating the index here would fail
 -- before 0002 runs).
+CREATE INDEX IF NOT EXISTS idx_attachments_concept_id ON attachments (concept_id);
 
 -- -------------------------------
 -- tsvector maintenance trigger

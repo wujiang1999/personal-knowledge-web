@@ -1,0 +1,166 @@
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream, createWriteStream } from "node:fs";
+import { mkdir, rename, rm, stat } from "node:fs/promises";
+import { basename, join } from "node:path";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
+import { query } from "./db";
+
+/** Upload cap: 100 MB. */
+export const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Absolute directory where uploaded attachment bytes are stored.
+ * Lives here (not in lib/config.ts) because this module is Node-only — config.ts
+ * is also bundled for the Edge middleware, which has no `node:path`.
+ */
+export function getAttachmentRoot(): string {
+  return process.env.ATTACHMENT_DIR || join(process.cwd(), "data", "attachments");
+}
+
+export interface Attachment {
+  id: string;
+  concept_id: string;
+  original_name: string;
+  mime_type: string;
+  size_bytes: number;
+  storage_key: string;
+  content_hash: string;
+  created_at: string;
+}
+
+export class AttachmentTooLargeError extends Error {}
+
+function attachmentDir(): string {
+  return getAttachmentRoot();
+}
+
+async function ensureDir(): Promise<void> {
+  await mkdir(attachmentDir(), { recursive: true });
+}
+
+/** Absolute path for a stored file. storage_key is server-generated; guard traversal. */
+export function attachmentFilePath(storageKey: string): string {
+  if (storageKey !== basename(storageKey) || storageKey.includes("..") || storageKey === "") {
+    throw new Error("invalid storage key");
+  }
+  return join(attachmentDir(), storageKey);
+}
+
+/** Stream a web ReadableStream to disk under a fresh uuid, hashing and counting bytes. */
+export async function saveAttachmentStream(
+  webBody: ReadableStream<Uint8Array>,
+): Promise<{ storageKey: string; sizeBytes: number; hash: string }> {
+  await ensureDir();
+  const storageKey = randomUUID();
+  const tmpPath = join(attachmentDir(), `${storageKey}.uploading`);
+  const hash = createHash("sha256");
+  let size = 0;
+
+  const meter = new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      size += chunk.length;
+      if (size > MAX_ATTACHMENT_BYTES) {
+        cb(new AttachmentTooLargeError("attachment exceeds 100 MB"));
+        return;
+      }
+      hash.update(chunk);
+      cb(null, chunk);
+    },
+  });
+
+  try {
+    const nodeStream = Readable.fromWeb(webBody as Parameters<typeof Readable.fromWeb>[0]);
+    await pipeline(nodeStream, meter, createWriteStream(tmpPath));
+  } catch (err) {
+    await rm(tmpPath, { force: true }).catch(() => {});
+    throw err;
+  }
+
+  await rename(tmpPath, join(attachmentDir(), storageKey));
+  return { storageKey, sizeBytes: size, hash: hash.digest("hex") };
+}
+
+export async function deleteAttachmentFile(storageKey: string): Promise<void> {
+  await rm(attachmentFilePath(storageKey), { force: true }).catch(() => {});
+}
+
+export async function attachmentStat(storageKey: string) {
+  return stat(attachmentFilePath(storageKey));
+}
+
+export function openAttachmentReadStream(storageKey: string, opts?: { start?: number; end?: number }) {
+  return createReadStream(attachmentFilePath(storageKey), opts);
+}
+
+// ---------- DB rows ----------
+
+function rowToAttachment(r: Attachment): Attachment {
+  return { ...r, size_bytes: Number(r.size_bytes) };
+}
+
+export async function listAttachments(conceptId: string): Promise<Attachment[]> {
+  const { rows } = await query<Attachment>(
+    `SELECT id, concept_id, original_name, mime_type, size_bytes, storage_key, content_hash, created_at
+     FROM attachments WHERE concept_id = $1 ORDER BY created_at DESC`,
+    [conceptId],
+  );
+  return rows.map(rowToAttachment);
+}
+
+export async function getAttachment(id: string): Promise<Attachment | null> {
+  const { rows } = await query<Attachment>(
+    `SELECT id, concept_id, original_name, mime_type, size_bytes, storage_key, content_hash, created_at
+     FROM attachments WHERE id = $1`,
+    [id],
+  );
+  return rows.length ? rowToAttachment(rows[0]) : null;
+}
+
+export async function insertAttachment(input: {
+  conceptId: string;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  storageKey: string;
+  hash: string;
+}): Promise<Attachment> {
+  const { rows } = await query<Attachment>(
+    `INSERT INTO attachments (concept_id, original_name, mime_type, size_bytes, storage_key, content_hash)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, concept_id, original_name, mime_type, size_bytes, storage_key, content_hash, created_at`,
+    [input.conceptId, input.originalName, input.mimeType, input.sizeBytes, input.storageKey, input.hash],
+  );
+  return rowToAttachment(rows[0]);
+}
+
+/** Delete the row and return it (so the caller can remove the file). */
+export async function deleteAttachmentRecord(id: string): Promise<Attachment | null> {
+  const { rows } = await query<Attachment>(
+    `DELETE FROM attachments WHERE id = $1
+     RETURNING id, concept_id, original_name, mime_type, size_bytes, storage_key, content_hash, created_at`,
+    [id],
+  );
+  return rows.length ? rowToAttachment(rows[0]) : null;
+}
+
+/** Whether a mime type should render inline in the browser (vs. download). */
+export function isInlinePreviewable(mime: string): boolean {
+  const m = (mime || "").toLowerCase();
+  if (m === "text/html") return false; // never render HTML inline (XSS)
+  return (
+    m.startsWith("image/") ||
+    m === "application/pdf" ||
+    m.startsWith("text/") ||
+    m.startsWith("audio/") ||
+    m.startsWith("video/")
+  );
+}
+
+/** Sanitize a stored mime before serving it back to the browser. */
+export function safeContentType(mime: string): string {
+  const m = (mime || "").toLowerCase();
+  if (!m || m === "text/html") return "application/octet-stream";
+  return m;
+}

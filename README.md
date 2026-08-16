@@ -118,6 +118,15 @@ NEW_USERNAME=alice NEW_PASSWORD=xxx RESET=1 npm run db:add-user
 
 启用公网访问时，数据库侧还需：`listen_addresses = '*'`（已配置）、`pg_hba.conf` 增加对应来源的 `scram-sha-256` 条目（已为内网网段配置）、以及安全组/firewalld 放行。
 
+## 附件
+
+每个知识概念下可上传附件（单文件 ≤ 100 MB），并支持浏览器内预览：
+
+- **存储**：文件字节保存在服务器本地磁盘（`ATTACHMENT_DIR`，默认 `./data/attachments`，已 gitignore）；数据库 `attachments` 表只存元数据（文件名 / MIME / 大小 / 哈希 / 磁盘 key）。
+- **预览**：图片（`<img>`）、PDF（`<iframe>`）、文本/代码（`<pre>`）、音视频（`<audio>`/`<video>`）原生预览；音视频支持 Range 拖动进度。其它类型走下载。
+- **鉴权**：上传 / 预览 / 下载 / 删除都走登录会话（JWT cookie），文件接口不公开。
+- **注意**：本地磁盘存储要求**应用与数据库同机部署（ECS）**。若未来迁到 Vercel，需改用对象存储（OSS 等）。
+
 ## OKF 导出说明
 
 导出的 ZIP 结构：

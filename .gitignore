@@ -8,6 +8,9 @@
 # production
 /build
 
+# attachment uploads (local disk)
+/data/
+
 # misc
 .DS_Store
 *.pem

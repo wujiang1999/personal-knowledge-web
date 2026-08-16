@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/requireUser";
 import { getConceptDetail } from "@/lib/concepts";
 import { ConceptForm } from "@/components/concept-form";
 import { DeleteConceptButton } from "@/components/delete-concept-button";
+import { AttachmentsPanel } from "@/components/attachments-panel";
 
 export default async function ConceptDetailPage({
   params,
@@ -75,6 +76,8 @@ export default async function ConceptDetailPage({
           {current?.body_markdown ?? ""}
         </pre>
       </section>
+
+      <AttachmentsPanel conceptId={concept.id} />
 
       <section>
         <h2 className="mb-2 font-medium">版本历史</h2>
