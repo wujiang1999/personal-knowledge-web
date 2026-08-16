@@ -75,7 +75,7 @@ export function ConceptForm({
       return;
     }
 
-    router.push(mode === "create" ? "/knowledge" : `/knowledge/${initial?.id}`);
+    router.push(mode === "create" ? `/knowledge/${data.id}` : `/knowledge/${initial?.id}`);
     router.refresh();
   }
 
