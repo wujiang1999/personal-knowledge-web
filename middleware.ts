@@ -45,7 +45,20 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  return NextResponse.next();
+  const res = NextResponse.next();
+  // Clickjacking protection is set here (not in next.config headers()) so it can
+  // be per-path: the attachment file endpoint must be frameable by our own PDF
+  // preview <iframe> (X-Frame-Options: SAMEORIGIN / frame-ancestors 'self'),
+  // while every other route keeps DENY / frame-ancestors 'none'.
+  const isAttachmentApi = pathname.startsWith("/api/attachments/");
+  res.headers.set("X-Frame-Options", isAttachmentApi ? "SAMEORIGIN" : "DENY");
+  if (process.env.NODE_ENV === "production") {
+    res.headers.set(
+      "Content-Security-Policy",
+      isAttachmentApi ? "frame-ancestors 'self'" : "frame-ancestors 'none'"
+    );
+  }
+  return res;
 }
 
 export const config = {

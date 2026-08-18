@@ -10,10 +10,13 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     const isProd = process.env.NODE_ENV === "production";
+    // NOTE: X-Frame-Options and CSP frame-ancestors are set in middleware.ts
+    // instead — they must be per-path so the /api/attachments/:id response can
+    // be framed by our own PDF preview <iframe> (frame-ancestors 'self'),
+    // while pages still get clickjacking protection (DENY / 'none').
     const securityHeaders = [
       { key: "X-Content-Type-Options", value: "nosniff" },
       { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-      { key: "X-Frame-Options", value: "DENY" },
       { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
     ];
     // Pragmatic CSP for a single-user app. 'unsafe-inline' for script-src is
@@ -26,7 +29,7 @@ const nextConfig: NextConfig = {
       securityHeaders.push({
         key: "Content-Security-Policy",
         value:
-          "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self'; frame-src 'self'; object-src 'none'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+          "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self'; frame-src 'self'; object-src 'none'; connect-src 'self'; base-uri 'self'; form-action 'self'",
       });
     }
     return [
