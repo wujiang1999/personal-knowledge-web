@@ -29,6 +29,9 @@ echo "==> current commit: $PREV_COMMIT"
 echo "==> git pull"
 git pull --ff-only
 
+echo "==> npm ci (full install: next build lint + typecheck need devDependencies)"
+npm ci --no-audit --no-fund
+
 echo "==> db migrate (idempotent; safe no-op when already applied)"
 npm run db:migrate
 
