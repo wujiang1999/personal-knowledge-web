@@ -11,6 +11,21 @@
 # attachment uploads (local disk)
 /data/
 
+# runtime state and generated reports
+/.config/
+/.npm/
+/coverage/
+*.log
+
+# local backups, database exports, and archive imports/exports
+*.backup
+*.dump
+*.sqlite
+*.sqlite3
+*.db
+*.tar.gz
+*.zip
+
 # misc
 .DS_Store
 *.pem
@@ -23,6 +38,11 @@ yarn-error.log*
 # env — ignore every real env file, keep only the placeholder template
 .env*
 !.env.example
+
+# private-key and certificate bundles
+*.key
+*.p12
+*.pfx
 
 # typescript
 *.tsbuildinfo
