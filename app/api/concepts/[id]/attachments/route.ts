@@ -4,6 +4,7 @@ import { query } from "@/lib/db";
 import { requireApiUser } from "@/lib/requireUser";
 import {
   AttachmentTooLargeError,
+  attachmentBytesForOwner,
   attachmentFilePath,
   deleteAttachmentFile,
   insertAttachment,
@@ -11,6 +12,7 @@ import {
   saveAttachmentStream,
   validateDeclaredMime,
   MAX_ATTACHMENT_BYTES,
+  MAX_TOTAL_ATTACHMENT_BYTES,
 } from "@/lib/attachments";
 
 export const runtime = "nodejs";
@@ -54,6 +56,10 @@ export async function PUT(
   if (len > MAX_ATTACHMENT_BYTES) {
     return NextResponse.json({ error: "attachment exceeds 100 MB" }, { status: 413 });
   }
+  const usedBytes = await attachmentBytesForOwner(user.id);
+  if (usedBytes + len > MAX_TOTAL_ATTACHMENT_BYTES) {
+    return NextResponse.json({ error: "attachment storage quota exceeded" }, { status: 413 });
+  }
 
   let originalName = "file";
   try {
@@ -91,6 +97,14 @@ export async function PUT(
   if (validated.error) {
     await deleteAttachmentFile(saved.storageKey);
     return NextResponse.json({ error: validated.error }, { status: 400 });
+  }
+
+  // The Content-Length pre-check above is not available for chunked uploads.
+  // Check the measured size before creating the DB row, and remove the bytes
+  // if the per-user quota would be exceeded.
+  if (usedBytes + saved.sizeBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+    await deleteAttachmentFile(saved.storageKey);
+    return NextResponse.json({ error: "attachment storage quota exceeded" }, { status: 413 });
   }
 
   const attachment = await insertAttachment({

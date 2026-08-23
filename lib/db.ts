@@ -26,3 +26,12 @@ export async function query<T extends QueryResultRow = Record<string, unknown>>(
 ): Promise<QueryResult<T>> {
   return getPool().query<T>(text, params as never[]);
 }
+
+/** Close the shared pool for one-off maintenance scripts. */
+export async function closePool(): Promise<void> {
+  if (globalForDb.pgPool) {
+    const pool = globalForDb.pgPool;
+    globalForDb.pgPool = undefined;
+    await pool.end();
+  }
+}

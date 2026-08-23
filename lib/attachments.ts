@@ -11,6 +11,20 @@ import { query } from "./db";
 export const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 
 /**
+ * Per-user storage cap. It can be raised for a self-hosted installation with
+ * MAX_TOTAL_ATTACHMENT_BYTES, but cannot be set below the single-file limit.
+ */
+function attachmentQuotaFromEnv(): number {
+  const configured = Number(process.env.MAX_TOTAL_ATTACHMENT_BYTES);
+  if (!Number.isSafeInteger(configured) || configured < MAX_ATTACHMENT_BYTES) {
+    return 2 * 1024 * 1024 * 1024; // 2 GiB
+  }
+  return configured;
+}
+
+export const MAX_TOTAL_ATTACHMENT_BYTES = attachmentQuotaFromEnv();
+
+/**
  * Absolute directory where uploaded attachment bytes are stored.
  * Lives here (not in lib/config.ts) because this module is Node-only — config.ts
  * is also bundled for the Edge middleware, which has no `node:path`.
@@ -122,6 +136,18 @@ export async function getAttachment(id: string): Promise<Attachment | null> {
     [id],
   );
   return rows.length ? rowToAttachment(rows[0]) : null;
+}
+
+/** Total attachment bytes owned by a user, across all of their concepts. */
+export async function attachmentBytesForOwner(ownerId: string): Promise<number> {
+  const { rows } = await query<{ total_bytes: string }>(
+    `SELECT COALESCE(SUM(a.size_bytes), 0)::text AS total_bytes
+     FROM attachments a
+     JOIN concepts c ON c.id = a.concept_id
+     WHERE c.owner_id = $1`,
+    [ownerId],
+  );
+  return Number(rows[0]?.total_bytes ?? 0);
 }
 
 export async function insertAttachment(input: {

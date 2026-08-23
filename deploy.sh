@@ -1,56 +1,76 @@
 #!/bin/bash
-# One-command deploy for this app on the ECS instance.
-#   bash deploy.sh            (run on the ECS instance)
-#   workbench exec -i i-j6c698asus1j5de5d66d -c 'bash /root/personal-knowledge-web/deploy.sh'
+# Deploy the code already checked out on this server.
 #
-# Flow: pull → migrate → build → restart → health check.
-# On failure: roll back to the previous commit (rebuild + restart) and exit 1.
+# This script deliberately does not fetch from GitHub or rewrite Git history.
+# Update the checkout first through the approved deployment path (for example,
+# a reviewed Git bundle), then run: sudo ./deploy.sh
 set -euo pipefail
-cd "$(dirname "$0")"
-
-APP=personal-knowledge-web
-PREV_COMMIT="$(git rev-parse HEAD)"
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+SERVICE="personal-knowledge-web"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3000/api/health}"
+PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://sjtuai.art}"
+cd "$APP_DIR"
 
-rollback() {
-  echo "==> deploy failed — rolling back to $PREV_COMMIT"
-  git reset --hard "$PREV_COMMIT" >/dev/null 2>&1 || true
-  if npm run build >/dev/null 2>&1; then
-    systemctl restart "$APP" >/dev/null 2>&1 || true
-    echo "==> rolled back: service restarted with the previous build"
-  else
-    echo "==> rollback build failed — previous .next may be stale; service NOT restarted"
-  fi
+if [[ "${EUID}" -ne 0 ]]; then
+  echo "Run as root so service restart and file ownership remain controlled." >&2
+  exit 2
+fi
+
+git_as_app() {
+  runuser -u knowledge-web -- env HOME=/var/lib/knowledge-web git -C "$APP_DIR" "$@"
 }
 
+if [[ -n "$(git_as_app status --porcelain --untracked-files=no)" ]]; then
+  echo "Refusing to deploy with tracked, uncommitted changes." >&2
+  exit 2
+fi
+
+rollback_dir=""
+rollback() {
+  status=$?
+  if [[ -n "$rollback_dir" && -d "$rollback_dir" ]]; then
+    echo "==> deploy failed — restoring the previous Next.js build"
+    rm -rf -- "$APP_DIR/.next"
+    mv "$rollback_dir" "$APP_DIR/.next"
+    systemctl restart "$SERVICE" || true
+  fi
+  exit "$status"
+}
 trap rollback ERR
 
-echo "==> current commit: $PREV_COMMIT"
-echo "==> git pull"
-git pull --ff-only
+echo "==> release commit: $(git_as_app rev-parse --short HEAD)"
+echo "==> npm ci"
+runuser -u knowledge-web -- env HOME=/var/lib/knowledge-web npm ci --no-audit --no-fund
 
-echo "==> npm ci (full install: next build lint + typecheck need devDependencies)"
-npm ci --no-audit --no-fund
+echo "==> validation"
+runuser -u knowledge-web -- env HOME=/var/lib/knowledge-web npm run check
 
 echo "==> db migrate (idempotent; safe no-op when already applied)"
-npm run db:migrate
+runuser -u knowledge-web -- env HOME=/var/lib/knowledge-web npm run db:migrate
 
 echo "==> build"
-npm run build
+if [[ -d "$APP_DIR/.next" ]]; then
+  rollback_dir="$(mktemp -d "$APP_DIR/.next.rollback.XXXXXX")"
+  rmdir "$rollback_dir"
+  mv "$APP_DIR/.next" "$rollback_dir"
+fi
+runuser -u knowledge-web -- env HOME=/var/lib/knowledge-web npm run build
 
 echo "==> restart service"
-systemctl restart "$APP"
+systemctl restart "$SERVICE"
 
 echo "==> health check ($HEALTH_URL)"
 for i in 1 2 3 4 5; do
-  if sleep 2; systemctl is-active --quiet "$APP" && curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
+  if sleep 2; systemctl is-active --quiet "$SERVICE" && curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
     echo "OK"
-    echo "==> deployed: $(git rev-parse --short HEAD)  active: $(systemctl is-active "$APP")"
+    runuser -u knowledge-web -- env HOME=/var/lib/knowledge-web PUBLIC_BASE_URL="$PUBLIC_BASE_URL" npm run smoke:prod
+    rm -rf -- "$rollback_dir"
+    rollback_dir=""
+    echo "==> deployed: $(git_as_app rev-parse --short HEAD) active: $(systemctl is-active "$SERVICE")"
     exit 0
   fi
   echo "    (attempt $i/5 not ready)"
 done
 
-echo "==> ERROR: service not healthy after restart"
-rollback
+echo "==> ERROR: service not healthy after restart" >&2
 exit 1

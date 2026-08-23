@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_TOTAL_ATTACHMENT_BYTES,
   isInlinePreviewable,
   safeContentType,
   sniffMime,
@@ -88,5 +90,11 @@ describe("validateDeclaredMime", () => {
       mime: "text/markdown",
     });
     expect(validateDeclaredMime("video/mp4", Buffer.alloc(64))).toEqual({ mime: "video/mp4" });
+  });
+});
+
+describe("attachment quota defaults", () => {
+  it("is never smaller than the individual upload cap", () => {
+    expect(MAX_TOTAL_ATTACHMENT_BYTES).toBeGreaterThanOrEqual(MAX_ATTACHMENT_BYTES);
   });
 });
