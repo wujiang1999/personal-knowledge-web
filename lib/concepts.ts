@@ -174,24 +174,75 @@ export interface SearchResult extends Concept {
   score: number;
 }
 
+/** Cached probe: is the pgroonga extension installed in this database? */
+let pgroongaAvailable: boolean | null = null;
+async function hasPgroonga(): Promise<boolean> {
+  if (pgroongaAvailable === null) {
+    try {
+      const { rows } = await query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM pg_extension WHERE extname = 'pgroonga'"
+      );
+      pgroongaAvailable = Number(rows[0]?.count ?? 0) > 0;
+    } catch {
+      pgroongaAvailable = false;
+    }
+  }
+  return pgroongaAvailable;
+}
+
 export async function searchConcepts(ownerId: string, q: string, limit = 20): Promise<SearchResult[]> {
   const needle = q.trim().slice(0, 200);
   if (!needle) return [];
 
-  // Escape LIKE metacharacters — % and _ are user-controllable wildcards.
-  // Passed as its own parameter ($2) so similarity/FTS still see the raw $1.
-  const like = "%" + escapeLike(needle) + "%";
+  // Tokenize on whitespace/punctuation. Every token must appear in
+  // title/description/body — AND semantics the raw-needle ILIKE cannot
+  // express — and the score gains a token-coverage term.
+  const tokens = needle.split(/[\s,，。;；:：、|/\\]+/).filter(Boolean);
+  const tokenCount = tokens.length;
 
-  // 'simple' FTS treats a CJK run as one lexeme, so a Chinese query can never
-  // match content_tsv. Only enter the FTS branch for ASCII tokens; Chinese
-  // queries rank purely via pg_trgm similarity + ILIKE (until PGroonga).
   const hasAscii = /[a-z0-9]/i.test(needle);
-  const ftsScore = hasAscii
-    ? "+ COALESCE(ts_rank(v.content_tsv, websearch_to_tsquery('simple', $1)), 0)"
-    : "";
-  const ftsWhere = hasAscii
-    ? "v.content_tsv @@ websearch_to_tsquery('simple', $1) OR "
-    : "";
+  // pg_trgm needs at least 3 characters to form trigrams.
+  const hasTrigrams = needle.length >= 3;
+  const pgroonga = await hasPgroonga();
+
+  // $1 = ownerId, then one LIKE param per token, then full-needle LIKE,
+  // prefix, raw needle, limit.
+  const params: unknown[] = [ownerId];
+  const tokenConds: string[] = [];
+  const coverageTerms: string[] = [];
+  for (const tok of tokens) {
+    params.push(`%${escapeLike(tok)}%`);
+    const p = `$${params.length}`;
+    tokenConds.push(`(c.title ILIKE ${p} OR c.description ILIKE ${p} OR v.body_markdown ILIKE ${p})`);
+    coverageTerms.push(
+      `CASE WHEN c.title ILIKE ${p} OR c.description ILIKE ${p} OR v.body_markdown ILIKE ${p} THEN 1 ELSE 0 END`
+    );
+  }
+  params.push(`%${escapeLike(needle)}%`);
+  const likeParam = `$${params.length}`;
+  params.push(`${escapeLike(needle)}%`);
+  const prefixParam = `$${params.length}`;
+  params.push(needle);
+  const qParam = `$${params.length}`;
+  params.push(limit);
+  const limitParam = `$${params.length}`;
+
+  // WHERE branches: strict token AND is the primary path; FTS (ASCII-only),
+  // trgm fuzzy (>=3 chars), and PGroonga (when installed) add recall.
+  const branches: string[] = [`(${tokenConds.join(" AND ")})`];
+  if (hasAscii) {
+    branches.push(`v.content_tsv @@ websearch_to_tsquery('simple', ${qParam})`);
+  }
+  if (hasTrigrams) {
+    // `%` and `%>` (query on the right) drive the GIN trgm index; the
+    // per-session thresholds are lowered below so partial matches survive.
+    branches.push(`c.title % ${qParam} OR v.body_markdown % ${qParam} OR v.body_markdown %> ${qParam}`);
+  }
+  if (pgroonga) {
+    // `&@` = all keywords with a CJK-aware bigram tokenizer; no query
+    // syntax, so arbitrary user input cannot raise a parse error.
+    branches.push(`v.body_markdown &@ ${qParam} OR c.title &@ ${qParam} OR COALESCE(c.description, '') &@ ${qParam}`);
+  }
 
   const sql = `
     SELECT
@@ -199,33 +250,45 @@ export async function searchConcepts(ownerId: string, q: string, limit = 20): Pr
       c.current_version, c.created_at, c.updated_at,
       v.body_markdown,
       (
-        (CASE WHEN c.title ILIKE $2 THEN 30 ELSE 0 END)
-        + (CASE WHEN v.body_markdown ILIKE $2 THEN 15 ELSE 0 END)
-        + (CASE WHEN c.description ILIKE $2 THEN 8 ELSE 0 END)
-        + (similarity(c.title, $1) * 50)
-        + (similarity(v.body_markdown, $1) * 20)
-        + (similarity(COALESCE(c.description, ''), $1) * 12)
-        ${ftsScore}
+        (CASE WHEN c.title = ${qParam} THEN 100 ELSE 0 END)
+        + (CASE WHEN c.title ILIKE ${prefixParam} THEN 40 ELSE 0 END)
+        + (CASE WHEN c.title ILIKE ${likeParam} THEN 30 ELSE 0 END)
+        + (CASE WHEN v.body_markdown ILIKE ${likeParam} THEN 15 ELSE 0 END)
+        + (CASE WHEN c.description ILIKE ${likeParam} THEN 8 ELSE 0 END)
+        + (${coverageTerms.join(" + ")}) * 20.0 / ${tokenCount}
+        ${hasTrigrams ? `+ (similarity(c.title, ${qParam}) * 50)
+        + (word_similarity(${qParam}, v.body_markdown) * 20)
+        + (similarity(COALESCE(c.description, ''), ${qParam}) * 12)` : ""}
+        ${hasAscii ? `+ COALESCE(ts_rank(v.content_tsv, websearch_to_tsquery('simple', ${qParam}), '{0.1,0.2,0.4,1.0}'::real[]), 0)` : ""}
+        ${pgroonga ? `+ COALESCE(pgroonga_score(v), 0) * 15
+        + COALESCE(pgroonga_score(c), 0) * 30` : ""}
       ) AS score
     FROM concepts c
     JOIN concept_versions v
       ON v.concept_id = c.id AND v.version_number = c.current_version
-    WHERE (
-      c.owner_id = $4 AND (
-        ${ftsWhere}
-        v.body_markdown ILIKE $2
-        OR c.title ILIKE $2
-        OR c.description ILIKE $2
-        OR c.title % $1
-        OR similarity(v.body_markdown, $1) > 0.05
-      )
-    )
+    WHERE c.owner_id = $1 AND (${branches.join(" OR ")})
     ORDER BY score DESC, c.updated_at DESC
-    LIMIT $3
+    LIMIT ${limitParam}
   `;
 
-  const { rows } = await query<SearchResult>(sql, [needle, like, limit, ownerId]);
-  return rows;
+  // SET LOCAL keeps the thresholds session-scoped: the pooled connection is
+  // returned clean after COMMIT/ROLLBACK.
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    if (hasTrigrams) {
+      await client.query("SET LOCAL pg_trgm.similarity_threshold = 0.1");
+      await client.query("SET LOCAL pg_trgm.word_similarity_threshold = 0.4");
+    }
+    const { rows } = await client.query<SearchResult>(sql, params);
+    await client.query("COMMIT");
+    return rows;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function createConcept(input: ConceptInput, user: { id: string; username: string }): Promise<string> {

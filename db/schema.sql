@@ -4,6 +4,9 @@
 -- brought up to date by the numbered files in db/migrations/.
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+-- CJK-aware full-text search; requires the postgresql-16-pgroonga package on
+-- the deployment host (https://packages.groonga.org/ubuntu/).
+CREATE EXTENSION IF NOT EXISTS pgroonga;
 
 -- -------------------------------
 -- migration bookkeeping
@@ -95,10 +98,13 @@ CREATE TABLE IF NOT EXISTS attachments (
 -- -------------------------------
 CREATE INDEX IF NOT EXISTS idx_concepts_title      ON concepts (title);
 CREATE INDEX IF NOT EXISTS idx_concepts_status     ON concepts (status);
+CREATE INDEX IF NOT EXISTS idx_concepts_owner_updated ON concepts (owner_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_concepts_title_trgm ON concepts USING GIN (title gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_concepts_desc_trgm  ON concepts USING GIN (description gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_versions_tsv        ON concept_versions USING GIN (content_tsv);
 CREATE INDEX IF NOT EXISTS idx_versions_body_trgm  ON concept_versions USING GIN (body_markdown gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_versions_body_pgroonga ON concept_versions USING pgroonga (body_markdown);
+CREATE INDEX IF NOT EXISTS idx_concepts_title_pgroonga ON concepts USING pgroonga (title);
 -- idx_sources_concept_id is created by db/migrations/0002 (the column is
 -- migration-added on existing databases; creating the index here would fail
 -- before 0002 runs).
@@ -109,7 +115,10 @@ CREATE INDEX IF NOT EXISTS idx_attachments_concept_id ON attachments (concept_id
 -- -------------------------------
 CREATE OR REPLACE FUNCTION concept_versions_tsv_trigger() RETURNS trigger AS $$
 BEGIN
-  NEW.content_tsv := to_tsvector('simple', coalesce(NEW.body_markdown, ''));
+  NEW.content_tsv :=
+    setweight(to_tsvector('simple', coalesce(NEW.title, '')), 'A') ||
+    setweight(to_tsvector('simple', coalesce(NEW.description, '')), 'B') ||
+    setweight(to_tsvector('simple', coalesce(NEW.body_markdown, '')), 'B');
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
