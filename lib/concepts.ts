@@ -259,7 +259,7 @@ export async function searchConcepts(ownerId: string, q: string, limit = 20): Pr
         ${hasTrigrams ? `+ (similarity(c.title, ${qParam}) * 50)
         + (word_similarity(${qParam}, v.body_markdown) * 20)
         + (similarity(COALESCE(c.description, ''), ${qParam}) * 12)` : ""}
-        ${hasAscii ? `+ COALESCE(ts_rank(v.content_tsv, websearch_to_tsquery('simple', ${qParam}), '{0.1,0.2,0.4,1.0}'::real[]), 0)` : ""}
+        				${hasAscii ? `+ COALESCE(ts_rank('{0.1,0.2,0.4,1.0}'::real[], v.content_tsv, websearch_to_tsquery('simple', ${qParam})), 0)` : ""}
         ${pgroonga ? `+ COALESCE(pgroonga_score(v), 0) * 15
         + COALESCE(pgroonga_score(c), 0) * 30` : ""}
       ) AS score
