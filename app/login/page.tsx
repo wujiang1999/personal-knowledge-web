@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { LoginForm } from "@/components/login-form";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 export default async function LoginPage({
   searchParams,
@@ -13,6 +14,9 @@ export default async function LoginPage({
 
   return (
     <main className="flex min-h-screen items-center justify-center px-4">
+      <div className="fixed right-5 top-5">
+        <ThemeToggle />
+      </div>
       <LoginForm next={next} />
     </main>
   );

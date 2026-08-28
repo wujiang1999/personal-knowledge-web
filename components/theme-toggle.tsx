@@ -21,7 +21,7 @@ export function ThemeToggle() {
       onClick={toggle}
       title={dark ? "切换到浅色" : "切换到深色"}
       aria-label="切换深色/浅色模式"
-      className="rounded-md px-2 py-1 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+      className="flex h-10 w-10 items-center justify-center rounded-md text-xl text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
     >
       {dark === null ? "🌓" : dark ? "☀️" : "🌙"}
     </button>
