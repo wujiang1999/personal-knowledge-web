@@ -1,0 +1,8 @@
+[Unit]
+Description=personal-knowledge-web backup restore drill (monthly, throwaway DB)
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/personal-knowledge-web-restore-drill

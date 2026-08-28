@@ -1,0 +1,9 @@
+[Unit]
+Description=Monthly restore drill for personal-knowledge-web backups
+
+[Timer]
+OnCalendar=*-*-15 04:10
+Persistent=true
+
+[Install]
+WantedBy=timers.target

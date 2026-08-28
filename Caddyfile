@@ -1,0 +1,40 @@
+www.wujiangai.art {
+	redir https://wujiangai.art{uri} permanent
+}
+
+# 门户: / = 导航页, /answers/ = 答案之书, /atlas/ = 话费套餐图鉴
+# (2026-08-25 合并, wujiang1999.art 已下线)
+wujiangai.art {
+	root * /srv/wujiang-portal
+	encode zstd gzip
+	header Cache-Control "no-cache"
+	file_server
+}
+
+www.sjtuai.art {
+	redir https://sjtuai.art{uri} permanent
+}
+
+# 知识库: 反代 127.0.0.1:3000 (personal-knowledge-web)
+# 注意: X-Frame-Options / CSP / nosniff 由应用层 middleware.ts 与 next.config.ts 负责
+# (附件路径故意用 SAMEORIGIN 供 <iframe> 预览), 边缘层只补 HSTS, 避免双层头互相覆盖
+sjtuai.art {
+	log {
+		output file /var/log/caddy/sjtuai-access.log
+	}
+	encode zstd gzip
+
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	# 应用单文件上传上限为 100MB (lib/attachments.ts MAX_ATTACHMENT_BYTES),
+	# 此处 128MB 以不破坏合法上传为前提拦截无界请求体
+	request_body {
+		max_size 128MB
+	}
+
+	reverse_proxy 127.0.0.1:3000 {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

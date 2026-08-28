@@ -1,0 +1,21 @@
+# KB hardening 2026-08-28 — tuned from Debian defaults
+[DEFAULT]
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+
+[sshd]
+enabled  = true
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+
+[caddy-sjtuai]
+enabled   = true
+filter    = caddy-sjtuai
+logpath   = /var/log/caddy/sjtuai-access.log
+port      = http,https
+ignoreip  = 127.0.0.1/8 43.155.203.242
+maxretry  = 8
+findtime  = 10m
+bantime   = 1h
