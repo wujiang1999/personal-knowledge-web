@@ -60,6 +60,14 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 - 2026-08-28：本地项目从 `E:\TXY\personal-knowledge-web\` 迁入 `deployment/sjtuai.art\`，
   按「deployment/<域名>/」统一归位；服务器端无任何变更。
+- 2026-08-28（晚间，登录故障修复，aef118c）：用户手动退出后陷入 /login↔/dashboard 重定向循环
+  （黑屏）。根因：`app/api/auth/logout/route.ts` 只做了 token_version+1，从未调用
+  `destroySession()` 清 Cookie（与注释声称不符）；Edge 中间件验签通过但无法校验
+  token_version，于是把已"逻辑注销"的会话继续放行 → /login 307 弹回、/dashboard 页面 API
+  全 401，前端死循环。修复：logout 补调 `destroySession()`；同批轮换 SESSION_SECRET 使
+  故障期间浏览器里的旧 Cookie 立即失效。经 `deploy.sh` 全量门禁（npm ci/校验/构建/健康/
+  冒烟）部署，端到端复现脚本验证退出链路恢复正常。该 bug 为应用存量问题，与当日基础设施
+  加固无关——密钥轮换迫使用户重新登录/退出才将其暴露。
 - 2026-08-28（加固，详见仓库根 `personal-knowledge-web-architecture-review.md`）：
   SSH 改为 key-only + 禁 root 并安装 fail2ban；unattended-upgrades 启用 security pocket；
   备份脚本修复保留清理 glob（原 18 字符模式永不匹配，旧快照无限累积）；新增月度恢复演练
