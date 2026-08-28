@@ -190,9 +190,26 @@ async function hasPgroonga(): Promise<boolean> {
   return pgroongaAvailable;
 }
 
+// Repeat searches (UI resubmits, MCP agent loops, back-navigation re-renders)
+// hit the same needle within seconds. A small TTL cache turns those into ~0ms.
+// Cleared on any concept mutation — search text only changes through those.
+const searchCache = new Map<string, { at: number; rows: SearchResult[] }>();
+const SEARCH_CACHE_TTL = 60_000;
+const SEARCH_CACHE_MAX = 200;
+
+function invalidateSearchCache(): void {
+  searchCache.clear();
+}
+
 export async function searchConcepts(ownerId: string, q: string, limit = 20): Promise<SearchResult[]> {
   const needle = q.trim().slice(0, 200);
   if (!needle) return [];
+
+  const cacheKey = `${ownerId}|${needle}|${limit}`;
+  const cached = searchCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL) {
+    return cached.rows;
+  }
 
   // Tokenize on whitespace/punctuation. Every token must appear in
   // title/description/body — AND semantics the raw-needle ILIKE cannot
@@ -248,7 +265,14 @@ export async function searchConcepts(ownerId: string, q: string, limit = 20): Pr
     SELECT
       c.id, c.type, c.title, c.description, c.status, c.tags,
       c.current_version, c.created_at, c.updated_at,
-      v.body_markdown,
+      -- Search results only ever render a ~2-line preview (UI) or feed a
+      -- truncating client (MCP bodyPreview); shipping full markdown grew the
+      -- payload 5-10x. Return a match-anchored window capped at 500 chars —
+      -- falls back to the head of the body when the raw needle itself does
+      -- not appear (token-only matches).
+      substring(
+        v.body_markdown from greatest(1, position(lower(${qParam}) in lower(v.body_markdown)) - 120) for 500
+      ) AS body_markdown,
       (
         (CASE WHEN c.title = ${qParam} THEN 100 ELSE 0 END)
         + (CASE WHEN c.title ILIKE ${prefixParam} THEN 40 ELSE 0 END)
@@ -280,8 +304,21 @@ export async function searchConcepts(ownerId: string, q: string, limit = 20): Pr
       await client.query("SET LOCAL pg_trgm.similarity_threshold = 0.1");
       await client.query("SET LOCAL pg_trgm.word_similarity_threshold = 0.4");
     }
-    const { rows } = await client.query<SearchResult>(sql, params);
+    // A named statement is parsed and planned ONCE per pooled connection;
+    // repeat executions skip parse+plan entirely. Measured on this schema:
+    // planning the multi-engine SQL costs ~65ms cold vs ~0.7ms execution, so
+    // unnamed queries re-paid that on every search after a cold connect.
+    // The text is deterministic per (engine flags, token count), so the name
+    // cannot collide with different SQL. Connections are replaced on deploy,
+    // which naturally invalidates old prepared statements.
+    const stmtName = `search_v1_${hasAscii ? 1 : 0}${hasTrigrams ? 1 : 0}${pgroonga ? 1 : 0}_${tokenCount}`;
+    const { rows } = await client.query<SearchResult>({ name: stmtName, text: sql, values: params as never[] });
     await client.query("COMMIT");
+    if (searchCache.size >= SEARCH_CACHE_MAX) {
+      const oldest = searchCache.keys().next().value;
+      if (oldest !== undefined) searchCache.delete(oldest);
+    }
+    searchCache.set(cacheKey, { at: Date.now(), rows });
     return rows;
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -320,6 +357,7 @@ export async function createConcept(input: ConceptInput, user: { id: string; use
       [conceptId, title, description, category, tags, status, type, body, contentHash, `human:${user.username}`]
     );
     await client.query("COMMIT");
+    invalidateSearchCache();
     return conceptId;
   } catch (err) {
     await client.query("ROLLBACK");
@@ -373,6 +411,7 @@ export async function addConceptVersion(
         [id, metadata.title, metadata.description, metadata.category, metadata.tags, metadata.status, metadata.type]
       );
       await client.query("COMMIT");
+      invalidateSearchCache();
       return { version: currentVersion, created: false };
     }
 
@@ -397,6 +436,7 @@ export async function addConceptVersion(
       [id, nextVersion, metadata.title, metadata.description, metadata.category, metadata.tags, metadata.type, metadata.status]
     );
     await client.query("COMMIT");
+    invalidateSearchCache();
     return { version: nextVersion, created: true };
   } catch (err) {
     await client.query("ROLLBACK");
@@ -430,6 +470,7 @@ export async function deleteConcept(id: string, ownerId: string): Promise<boolea
     // Remove disk bytes after the DB commit; any failure is logged, and the
     // orphan is recoverable via the reconcile script.
     if (deleted) {
+      invalidateSearchCache();
       for (const a of atts.rows) {
         await deleteAttachmentFile(a.storage_key);
       }
