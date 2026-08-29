@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { createFolder, deleteCategoryFolder, renameCategoryFolder } from "@/lib/concepts";
+import { createFolder, deleteCategoryFolder, listFolders, renameCategoryFolder } from "@/lib/concepts";
 import { requireApiUser } from "@/lib/requireUser";
 
 const pathSchema = z.string().min(1).max(200);
@@ -30,6 +30,15 @@ function composeMovePath(path: string, parent: string): string {
   if (!name) return path;
   const normalizedParent = parent.split("/").filter(Boolean).join("/");
   return normalizedParent ? `${normalizedParent}/${name}` : name;
+}
+
+/** List empty-folder entity paths. Concept-derived folders are not included —
+ * clients can derive those from concept categories. */
+export async function GET() {
+  const user = await requireApiUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const folders = await listFolders(user);
+  return NextResponse.json({ folders });
 }
 
 export async function POST(req: Request) {
