@@ -11,8 +11,8 @@
 | Web 框架 | Next.js 15 (App Router) + TypeScript |
 | UI | Tailwind CSS |
 | 身份认证 | 自定义用户名 + 密码（bcrypt 哈希，JWT httpOnly Cookie 会话） |
-| 数据库 | 自建 PostgreSQL 16（部署在 ECS 实例） |
-| 全文检索 | PostgreSQL `tsvector` + `pg_trgm` 三角模糊匹配 |
+| 数据库 | 自建 PostgreSQL 16（部署在腾讯云服务器，与应用同机） |
+| 全文检索 | PostgreSQL PGroonga + `tsvector` / `pg_trgm` 混合检索（CJK-aware） |
 | OKF 导出 | 自研 OKF v0.2 Exporter，输出 Markdown + YAML frontmatter，打包 ZIP |
 
 ## 已实现功能（MVP）
@@ -85,27 +85,26 @@ npm run format      # Prettier（可选，格式化全库）
 
 CI（`.github/workflows/ci.yml`）在 push/PR 时自动执行以上四步（typecheck/lint/test/build）。
 
-## 部署到 ECS（自托管）
+## 部署（自托管 · 腾讯云）
 
-应用以 systemd 服务 `personal-knowledge-web` 运行在 ECS 实例的 `/root/personal-knowledge-web`，监听 `0.0.0.0:3000`。
+应用以 systemd 服务 `personal-knowledge-web` 运行在腾讯云服务器的 `/opt/personal-knowledge-web`，监听 `127.0.0.1:3000`（仅本机），由 Caddy 反向代理对外提供 `https://sjtuai.art` 并终止 TLS；运行账号为专用低权限账号 `knowledge-web`。
 
-更新代码并部署（二选一）：
+更新代码并部署：
+
+1. 通过**审核后的 git bundle** 将目标 commit 更新到服务器检出 `/opt/personal-knowledge-web`（`deploy.sh` 刻意不访问 GitHub、不改写 Git 历史）。
+2. SSH 登录服务器，在检出目录执行：
 
 ```bash
-# 方式一：在实例上直接执行
-bash /root/personal-knowledge-web/deploy.sh
-
-# 方式二：本地通过 workbench CLI 触发
-workbench exec -i i-j6c698asus1j5de5d66d -c 'bash /root/personal-knowledge-web/deploy.sh'
+sudo ./deploy.sh
 ```
 
-`deploy.sh` 流程：记录当前 commit → `git pull --ff-only` → `npm run db:migrate`（幂等，已应用迁移为 no-op）→ `npm run build` → `systemctl restart` → 轮询 `http://127.0.0.1:3000/api/health` 探活。任一步失败自动 `git reset --hard` 回滚到上一 commit 并重启旧构建，退出码 1。
+`deploy.sh` 流程：`npm ci` → `npm run check`（typecheck + lint + test）→ `npm run db:migrate`（幂等，已应用迁移为 no-op）→ `npm run build`（当前构建自动转存为 `.next.rollback`）→ `systemctl restart` → 轮询 `http://127.0.0.1:3000/api/health` 探活 → `npm run smoke:prod` 公网冒烟测试。任一步失败自动恢复旧构建并重启，退出码 1。
 
-> ⚠️ **生产环境必须启用 HTTPS（TLS）**。应用以明文 HTTP 直出公网时，登录只能把 `SESSION_COOKIE_SECURE` 设为 `false`，会话 Cookie 将在公网明文传输，网络路径上的中间人可直接接管会话。见下方「TLS / HTTPS」。
+> ⚠️ **生产环境必须启用 HTTPS（TLS）**。若应用绕过反代以明文 HTTP 直出公网，只能把 `SESSION_COOKIE_SECURE` 设为 `false`，会话 Cookie 将在公网明文传输，网络路径上的中间人可直接接管会话。
 
 ### TLS / HTTPS
 
-应用本身不终止 TLS；建议在实例上用反向代理（Caddy 一键 `https://你的域名` 或 nginx + certbot）把 `:443` 转发到 `127.0.0.1:3000`，并保持 `SESSION_COOKIE_SECURE=true`。没有域名时可用 Cloudflare Tunnel 为公网 IP 提供 HTTPS。不要以明文 HTTP 长期直出公网。
+线上由 Caddy 反向代理终止 TLS（`sjtuai.art`，证书由 Caddy 自动申请与续期），应用只监听 `127.0.0.1:3000`，生产环境保持 `SESSION_COOKIE_SECURE=true`。不要绕过反代把应用端口直接暴露公网。
 
 ## 用户管理
 
@@ -113,7 +112,7 @@ workbench exec -i i-j6c698asus1j5de5d66d -c 'bash /root/personal-knowledge-web/d
 
 ```powershell
 # Windows PowerShell —— 新增用户
-cd E:\ECS\personal-knowledge-web
+cd E:\TXY\deployment\sjtuai.art
 $env:NEW_USERNAME = 'alice'
 $env:NEW_PASSWORD = '请改成强密码'
 npm run db:add-user
@@ -134,7 +133,7 @@ NEW_USERNAME=alice NEW_PASSWORD=xxx RESET=1 npm run db:add-user
 - `NEW_PASSWORD` 仅在进程环境内使用；不要把它写进 `.env` 长期留存（`.env` 已 gitignore，但仍建议用完即清）。
 - 脚本读 `.env` 的 `DATABASE_URL`：在实例本地跑用 `127.0.0.1:5432`；从其它机器跑需先把 host 换成可达地址（公网 IP 或隧道）。
 
-## 部署到 Vercel
+## 部署到 Vercel（备选方案）
 
 1. 将本仓库推送到 GitHub。
 2. 在 Vercel 导入该仓库（框架自动识别 Next.js）。
@@ -146,10 +145,9 @@ NEW_USERNAME=alice NEW_PASSWORD=xxx RESET=1 npm run db:add-user
 
 ### ⚠️ 关键：数据库网络连通性
 
-数据库部署在 ECS 实例上（该实例拥有公网 IP `47.238.107.150`，安全组已放行 `5432`）。要让外部环境（如 Vercel）可访问，任选其一：
+数据库部署在云服务器本机（不对公网开放 5432）。要让外部环境（如 Vercel）可访问，任选其一：
 
-- **直接连公网 IP（不推荐）**：`DATABASE_URL` 指向 `47.238.107.150`。**把 PostgreSQL 5432 直连公网属高危暴露面**（数据库凭据一旦泄露等于全库直读/直写，绕过应用全部防护）；确需直连时必须 `?sslmode=require` 强制加密，并在安全组/防火墙尽量按来源 IP 白名单收窄。
-- **内网穿透/隧道**：Cloudflare Tunnel、frp 等，将实例 `5432` 暴露为公网 endpoint。
+- **内网穿透/隧道**：Cloudflare Tunnel、frp 等，将服务器 `5432` 暴露为公网 endpoint（必须强制 TLS）。
 - **改用云数据库（推荐）**：将 `DATABASE_URL` 换成 Supabase / Neon 等托管 PostgreSQL（托管侧自带 TLS 与访问控制，但需迁移数据）。
 
 ## 附件
@@ -159,35 +157,18 @@ NEW_USERNAME=alice NEW_PASSWORD=xxx RESET=1 npm run db:add-user
 - **存储**：文件字节保存在服务器本地磁盘（`ATTACHMENT_DIR`，默认 `./data/attachments`，已 gitignore）；数据库 `attachments` 表只存元数据（文件名 / MIME / 大小 / 哈希 / 磁盘 key）。
 - **预览**：图片（`<img>`）、PDF（`<iframe>`）、文本/代码（`<pre>`）、音视频（`<audio>`/`<video>`）原生预览；音视频支持 Range 拖动进度。其它类型走下载。
 - **鉴权**：上传 / 预览 / 下载 / 删除都走登录会话（JWT cookie），文件接口不公开。
-- **注意**：本地磁盘存储要求**应用与数据库同机部署（ECS）**。若未来迁到 Vercel，需改用对象存储（OSS 等）。
+- **注意**：本地磁盘存储要求**应用与数据库同机部署（云服务器）**。若未来迁到 Vercel，需改用对象存储（OSS 等）。
 
 ## 备份与恢复
 
-个人知识库最重要的运维动作。建议在实例上配置每日定时备份（`crontab`）：
+个人知识库最重要的运维动作。服务器已配置 systemd 定时备份 `personal-knowledge-web-backup.timer`：每日备份 PostgreSQL 数据库、附件、代码 git bundle 与 SHA256 校验和到 `/var/backups/personal-knowledge-web/`，保留 14 天。
 
 ```bash
-# /root/backup-knowledge.sh
-#!/bin/bash
-set -euo pipefail
-set -a; source /root/personal-knowledge-web/.env; set +a
-STAMP=$(date +%F_%H%M)
-mkdir -p /root/backups
-pg_dump "$DATABASE_URL" -Fc -f /root/backups/knowledge-$STAMP.dump
-tar -C /root/personal-knowledge-web -czf /root/backups/attachments-$STAMP.tar.gz data/attachments
-find /root/backups -name '*.dump' -mtime +14 -delete
-find /root/backups -name '*.tar.gz' -mtime +14 -delete
-echo "backup ok: $STAMP"
+sudo systemctl status personal-knowledge-web-backup.service   # 查看最近一次备份
+sudo systemctl list-timers | grep backup                      # 查看下次备份时间
 ```
 
-恢复：
-
-```bash
-pg_restore --clean --if-exists -d "$DATABASE_URL" /root/backups/knowledge-<日期>.dump
-tar -C /root/personal-knowledge-web -xzf /root/backups/attachments-<日期>.tar.gz
-systemctl restart personal-knowledge-web
-```
-
-> 示例含完整知识库（concepts / versions / sources / users）与附件字节；数据库与附件按同一时间戳归档才能保持一致。
+恢复演练（新空库 + 校验 SHA256SUMS + `pg_restore --list` 预检）的完整步骤见 `docs/OPERATIONS.md`。数据库与附件按同一时间戳归档，恢复时必须成对还原才能保持一致。
 
 ## OKF 导出说明
 
@@ -210,7 +191,6 @@ systemctl restart personal-knowledge-web
 - 注入流程（Markdown/PDF/DOCX/URL）、LLM 知识原子化
 - 近似去重、冲突审核、Claim 抽取
 - OKF 同步到 Private Git 仓库
-- 中文 PGroonga 全文检索（需在 ECS 的 PostgreSQL 16 安装 `postgresql-16-pgroonga` 扩展并 `CREATE EXTENSION pgroonga`，替换 `simple` tsvector 管线）
 
 ## 安全说明
 

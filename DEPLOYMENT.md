@@ -58,6 +58,11 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 ## 变更历史
 
+- 2026-08-29（角色层，5db0c9a/c2930cd）：新增 `users.role`（'user'/'admin'，迁移 0010，admin 账号设为 admin）。
+  admin 角色在所有列表/搜索/详情/导出/来源/更新/删除/附件接口绕过 owner 过滤，可跨账号读写；
+  非 admin 账号隔离行为不变。列表/详情/搜索结果带 `owner_id` + `owner_username`，admin 界面
+  对他人条目显示 👤 徽标。MCP 的 admin API key 自动继承该视野。同批修复存量 bug：`GET /api/concepts`
+  不带 `?limit` 时因 `Number(null)===0` 静默按 limit=1 返回（c2930cd），现默认 100。
 - 2026-08-28：本地项目从 `E:\TXY\personal-knowledge-web\` 迁入 `deployment/sjtuai.art\`，
   按「deployment/<域名>/」统一归位；服务器端无任何变更。
 - 2026-08-28（晚间，登录故障修复，aef118c）：用户手动退出后陷入 /login↔/dashboard 重定向循环
