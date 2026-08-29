@@ -1,0 +1,57 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { deleteCategoryFolder, renameCategoryFolder } from "@/lib/concepts";
+import { requireApiUser } from "@/lib/requireUser";
+
+const pathSchema = z.string().min(1).max(200);
+const nameSchema = z
+  .string()
+  .trim()
+  .min(1, "名称不能为空")
+  .max(100)
+  .refine((s) => !s.includes("/"), "名称不能包含 /");
+
+const schema = z.discriminatedUnion("op", [
+  z.object({ op: z.literal("rename"), path: pathSchema, name: nameSchema }),
+  // parent: "" moves the folder to the root level.
+  z.object({ op: z.literal("move"), path: pathSchema, parent: z.string().max(200) }),
+  z.object({ op: z.literal("delete"), path: pathSchema }),
+]);
+
+function composeNewPath(path: string, name: string): string {
+  const segs = path.split("/").filter(Boolean);
+  const parent = segs.slice(0, -1).join("/");
+  return parent ? `${parent}/${name}` : name;
+}
+
+function composeMovePath(path: string, parent: string): string {
+  const name = path.split("/").filter(Boolean).pop();
+  if (!name) return path;
+  const normalizedParent = parent.split("/").filter(Boolean).join("/");
+  return normalizedParent ? `${normalizedParent}/${name}` : name;
+}
+
+export async function POST(req: Request) {
+  const user = await requireApiUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  let body: z.infer<typeof schema>;
+  try {
+    body = schema.parse(await req.json());
+  } catch (err) {
+    const message = err instanceof z.ZodError ? err.issues[0]?.message : undefined;
+    return NextResponse.json({ error: message || "invalid request" }, { status: 400 });
+  }
+
+  const result =
+    body.op === "rename"
+      ? await renameCategoryFolder(user, body.path, composeNewPath(body.path, body.name))
+      : body.op === "move"
+        ? await renameCategoryFolder(user, body.path, composeMovePath(body.path, body.parent))
+        : await deleteCategoryFolder(user, body.path);
+
+  if (!result.ok) {
+    return NextResponse.json({ error: result.message }, { status: result.code === "conflict" ? 409 : 400 });
+  }
+  return NextResponse.json({ affected: result.affected });
+}

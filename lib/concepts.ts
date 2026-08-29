@@ -164,6 +164,94 @@ export function buildCategoryTree(concepts: Concept[]): {
   return { rootConcepts, roots };
 }
 
+// ---- Category folder management -------------------------------------------
+// Folders are derived views over concepts.category (no folder entity), so
+// rename/move rewrite the path prefix of every concept in the subtree and
+// delete uncategorizes it. Version snapshots keep the classification history;
+// updated_at is intentionally left untouched so bulk ops don't flood 最近更新.
+
+/** True when `path` equals or lives under `ancestor` (slash-boundary aware). */
+export function isSameOrDescendantPath(path: string, ancestor: string): boolean {
+  return path === ancestor || path.startsWith(ancestor + "/");
+}
+
+/** Pure prefix rewrite for folder rename/move. Callers must only pass rows
+ * matching `from` exactly or `from + "/*"` — the SQL filters on that. */
+export function rewriteCategoryPath(category: string, from: string, to: string): string {
+  return category === from ? to : to + category.slice(from.length);
+}
+
+export type CategoryOpResult =
+  | { ok: true; affected: number }
+  | { ok: false; code: "invalid" | "conflict"; message: string };
+
+/** Rename a folder (rewrite `path` → `newPath`) for every concept in scope. */
+export async function renameCategoryFolder(user: ScopeUser, path: string, newPath: string): Promise<CategoryOpResult> {
+  const from = normalizeCategory(path);
+  const to = normalizeCategory(newPath);
+  if (!from || !to) return { ok: false, code: "invalid", message: "路径不能为空" };
+  if (to === from) return { ok: true, affected: 0 };
+  if (isSameOrDescendantPath(to, from)) {
+    return { ok: false, code: "invalid", message: "不能把文件夹移动到它自身内部" };
+  }
+
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    // Non-admin users only see and move their own concepts; admin transcends
+    // scoping, mirroring listConcepts.
+    const ownerClauseRead = user.role === "admin" ? "" : " AND owner_id = $3";
+    const ownerClauseUpdate = user.role === "admin" ? "" : " AND owner_id = $4";
+    const scopeParams = user.role === "admin" ? [] : [user.id];
+
+    // Target path must be free — silent folder merging would be surprising.
+    const conflict = await client.query(
+      `SELECT 1 FROM concepts WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
+      [to, escapeLike(to), ...scopeParams]
+    );
+    if ((conflict.rowCount ?? 0) > 0) {
+      await client.query("ROLLBACK");
+      return { ok: false, code: "conflict", message: `目标文件夹「${to}」已存在` };
+    }
+    const source = await client.query(
+      `SELECT 1 FROM concepts WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
+      [from, escapeLike(from), ...scopeParams]
+    );
+    if ((source.rowCount ?? 0) === 0) {
+      await client.query("ROLLBACK");
+      return { ok: false, code: "invalid", message: `文件夹「${from}」不存在` };
+    }
+    const updated = await client.query(
+      `UPDATE concepts
+       SET category = CASE WHEN category = $1 THEN $2 ELSE $2 || substring(category FROM length($1) + 1) END
+       WHERE (category = $1 OR category LIKE $3 || '/%')${ownerClauseUpdate}`,
+      user.role === "admin" ? [from, to, escapeLike(from)] : [from, to, escapeLike(from), user.id]
+    );
+    await client.query("COMMIT");
+    invalidateSearchCache();
+    return { ok: true, affected: updated.rowCount ?? 0 };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Delete a folder: uncategorize every concept in its subtree (content kept). */
+export async function deleteCategoryFolder(user: ScopeUser, path: string): Promise<CategoryOpResult> {
+  const from = normalizeCategory(path);
+  if (!from) return { ok: false, code: "invalid", message: "路径不能为空" };
+
+  const ownerClause = user.role === "admin" ? "" : " AND owner_id = $3";
+  const res = await query(
+    `UPDATE concepts SET category = NULL WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClause}`,
+    user.role === "admin" ? [from, escapeLike(from)] : [from, escapeLike(from), user.id]
+  );
+  invalidateSearchCache();
+  return { ok: true, affected: res.rowCount ?? 0 };
+}
+
 export async function getConceptDetail(id: string, user: ScopeUser): Promise<ConceptDetail | null> {
   const { rows } =
     user.role === "admin"

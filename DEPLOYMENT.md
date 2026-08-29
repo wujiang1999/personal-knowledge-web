@@ -58,6 +58,12 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 ## 变更历史
 
+- 2026-08-29（目录管理）：仪表盘「知识目录」升级为可折叠文件树（`components/directory-tree.tsx`），
+  并补齐文件夹级操作——重命名（仅最后一级）、移动（可选新父目录，连同子树）、删除（子树条目
+  移回根目录，**不删除内容**）。新增 `POST /api/categories`（`op=rename|move|delete`，lib 层
+  `renameCategoryFolder`/`deleteCategoryFolder`）。文件夹是 `concepts.category` 的派生视图（无
+  文件夹实体），操作按 owner 过滤、admin 可跨账号；目标路径冲突返回 409；版本快照保留分类历史，
+  `updated_at` 不变以免刷屏「最近更新」。
 - 2026-08-29（角色层，5db0c9a/c2930cd）：新增 `users.role`（'user'/'admin'，迁移 0010，admin 账号设为 admin）。
   admin 角色在所有列表/搜索/详情/导出/来源/更新/删除/附件接口绕过 owner 过滤，可跨账号读写；
   非 admin 账号隔离行为不变。列表/详情/搜索结果带 `owner_id` + `owner_username`，admin 界面
