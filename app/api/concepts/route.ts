@@ -18,10 +18,12 @@ export async function GET(req: Request) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const url = new URL(req.url);
-  const rawLimit = Number(url.searchParams.get("limit"));
-  const rawOffset = Number(url.searchParams.get("offset"));
-  const limit = Number.isFinite(rawLimit) ? Math.min(200, Math.max(1, Math.trunc(rawLimit))) : 100;
-  const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.trunc(rawOffset)) : 0;
+  // Number(null) === 0 in JS: a missing ?limit must not become limit=1.
+  const limitRaw = url.searchParams.get("limit");
+  const limit =
+    limitRaw === null ? 100 : Math.min(200, Math.max(1, Math.trunc(Number(limitRaw)) || 100));
+  const offsetRaw = Number(url.searchParams.get("offset"));
+  const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.trunc(offsetRaw)) : 0;
   const concepts = await listConcepts({ user, limit, offset });
   return NextResponse.json({ concepts });
 }
