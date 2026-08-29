@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractBearerKey, hashApiKey } from "../src/apiKey.js";
+import { extractBearerKey, hashApiKey } from "../lib/apiKey.js";
 
 const KEY = `pkb_${"a".repeat(48)}`;
 
