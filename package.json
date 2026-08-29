@@ -14,6 +14,7 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts",
     "db:add-user": "tsx scripts/add-user.ts",
+    "db:create-api-key": "tsx scripts/create-api-key.ts",
     "attachments:audit": "tsx scripts/audit-attachments.ts",
     "smoke:prod": "node scripts/smoke-production.mjs"
   },

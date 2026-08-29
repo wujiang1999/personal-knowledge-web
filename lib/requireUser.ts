@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getSession } from "./auth";
+import { getUserByApiKey } from "./apiKey";
 import { query } from "./db";
 
 export interface AuthUser {
@@ -29,8 +30,15 @@ export async function requireUser(): Promise<AuthUser> {
 /**
  * Load the authenticated user for an API route, returning null instead of
  * redirecting so the handler can return a JSON 401.
+ *
+ * Accepts two credential types: `Authorization: Bearer pkb_...` API keys
+ * (machine clients, e.g. the MCP server) take precedence when present — an
+ * invalid key is answered as-is and never falls back to the cookie — and
+ * browser requests keep using the httpOnly session cookie.
  */
 export async function requireApiUser(): Promise<AuthUser | null> {
+  const viaKey = await getUserByApiKey();
+  if (viaKey) return viaKey;
   const session = await getSession();
   if (!session) return null;
   const { rows } = await query<{ id: string; username: string; token_version: number }>(

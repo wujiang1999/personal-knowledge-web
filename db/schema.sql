@@ -93,6 +93,17 @@ CREATE TABLE IF NOT EXISTS attachments (
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS api_keys (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         text NOT NULL,
+  key_hash     text NOT NULL UNIQUE,    -- sha256 of the plaintext key; the
+                                        -- plaintext is shown once at creation
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  last_used_at timestamptz,
+  revoked_at   timestamptz
+);
+
 -- -------------------------------
 -- indexes
 -- -------------------------------
