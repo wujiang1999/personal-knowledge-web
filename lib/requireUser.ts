@@ -11,6 +11,9 @@ export interface AuthUser {
   role: "user" | "admin";
 }
 
+/** Owner-scoping only needs identity + role; lib functions take this shape. */
+export type ScopeUser = Pick<AuthUser, "id" | "role">;
+
 /**
  * Load the authenticated user or redirect to /login.
  * Call this in every protected server component.
