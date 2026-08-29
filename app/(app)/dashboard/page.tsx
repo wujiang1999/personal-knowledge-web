@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/requireUser";
-import { listConcepts, listSources, buildCategoryTree, type CategoryTreeNode } from "@/lib/concepts";
+import { listConcepts, listSources, listFolders, buildCategoryTree, type CategoryTreeNode } from "@/lib/concepts";
 import { DirectoryTree, type DirectoryTreeFolder } from "@/components/directory-tree";
 
 function countSubtree(node: CategoryTreeNode): number {
@@ -20,7 +20,11 @@ function toFolder(node: CategoryTreeNode): DirectoryTreeFolder {
 
 export default async function DashboardPage() {
   const user = await requireUser();
-  const [allConcepts, sources] = await Promise.all([listConcepts({ user }), listSources(user)]);
+  const [allConcepts, sources, folderPaths] = await Promise.all([
+    listConcepts({ user }),
+    listSources(user),
+    listFolders(user),
+  ]);
   // listConcepts orders by updated_at DESC, so the top 10 are the most recent.
   const recent = allConcepts.slice(0, 10);
 
@@ -29,7 +33,7 @@ export default async function DashboardPage() {
     { label: "原始来源", value: sources.length },
   ];
 
-  const { roots, rootConcepts } = buildCategoryTree(allConcepts);
+  const { roots, rootConcepts } = buildCategoryTree(allConcepts, folderPaths);
 
   return (
     <div className="space-y-8">

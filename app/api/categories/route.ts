@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { deleteCategoryFolder, renameCategoryFolder } from "@/lib/concepts";
+import { createFolder, deleteCategoryFolder, renameCategoryFolder } from "@/lib/concepts";
 import { requireApiUser } from "@/lib/requireUser";
 
 const pathSchema = z.string().min(1).max(200);
@@ -16,6 +16,7 @@ const schema = z.discriminatedUnion("op", [
   // parent: "" moves the folder to the root level.
   z.object({ op: z.literal("move"), path: pathSchema, parent: z.string().max(200) }),
   z.object({ op: z.literal("delete"), path: pathSchema }),
+  z.object({ op: z.literal("create"), path: pathSchema }),
 ]);
 
 function composeNewPath(path: string, name: string): string {
@@ -41,6 +42,14 @@ export async function POST(req: Request) {
   } catch (err) {
     const message = err instanceof z.ZodError ? err.issues[0]?.message : undefined;
     return NextResponse.json({ error: message || "invalid request" }, { status: 400 });
+  }
+
+  if (body.op === "create") {
+    const result = await createFolder(user, body.path);
+    if (!result.ok) {
+      return NextResponse.json({ error: result.message }, { status: result.code === "conflict" ? 409 : 400 });
+    }
+    return NextResponse.json({ path: body.path }, { status: 201 });
   }
 
   const result =

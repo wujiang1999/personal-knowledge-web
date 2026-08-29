@@ -121,7 +121,7 @@ export interface CategoryTreeNode {
  */
 const collator = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "variant" });
 
-export function buildCategoryTree(concepts: Concept[]): {
+export function buildCategoryTree(concepts: Concept[], extraFolderPaths: string[] = []): {
   rootConcepts: Concept[];
   roots: CategoryTreeNode[];
 } {
@@ -129,26 +129,40 @@ export function buildCategoryTree(concepts: Concept[]): {
   const rootConcepts: Concept[] = [];
   const map = new Map<string, CategoryTreeNode>();
 
+  // Walk a slash path creating every missing node; returns the leaf.
+  const ensurePath = (path: string): CategoryTreeNode => {
+    const segs = path.split("/");
+    let siblings = roots;
+    let fullPath = "";
+    let node: CategoryTreeNode = { name: "", path: "", concepts: [], children: [] };
+    for (let i = 0; i < segs.length; i++) {
+      fullPath = fullPath ? `${fullPath}/${segs[i]}` : segs[i];
+      const existing = map.get(fullPath);
+      if (!existing) {
+        node = { name: segs[i], path: fullPath, concepts: [], children: [] };
+        map.set(fullPath, node);
+        siblings.push(node);
+      } else {
+        node = existing;
+      }
+      siblings = node.children;
+    }
+    return node;
+  };
+
+  // Empty-folder rows exist without concepts and must show up in the tree.
+  for (const p of extraFolderPaths) {
+    const path = normalizeCategory(p);
+    if (path) ensurePath(path);
+  }
+
   for (const c of concepts) {
     const path = normalizeCategory(c.category);
     if (!path) {
       rootConcepts.push(c);
       continue;
     }
-    const segs = path.split("/");
-    let siblings = roots;
-    let fullPath = "";
-    for (let i = 0; i < segs.length; i++) {
-      fullPath = fullPath ? `${fullPath}/${segs[i]}` : segs[i];
-      let node = map.get(fullPath);
-      if (!node) {
-        node = { name: segs[i], path: fullPath, concepts: [], children: [] };
-        map.set(fullPath, node);
-        siblings.push(node);
-      }
-      if (i === segs.length - 1) node.concepts.push(c);
-      siblings = node.children;
-    }
+    ensurePath(path).concepts.push(c);
   }
 
   const sortNodes = (nodes: CategoryTreeNode[]) => {
@@ -205,6 +219,7 @@ export async function renameCategoryFolder(user: ScopeUser, path: string, newPat
     const scopeParams = user.role === "admin" ? [] : [user.id];
 
     // Target path must be free — silent folder merging would be surprising.
+    // Both entity forms can occupy it: empty-folder rows and concept categories.
     const conflict = await client.query(
       `SELECT 1 FROM concepts WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
       [to, escapeLike(to), ...scopeParams]
@@ -213,11 +228,28 @@ export async function renameCategoryFolder(user: ScopeUser, path: string, newPat
       await client.query("ROLLBACK");
       return { ok: false, code: "conflict", message: `目标文件夹「${to}」已存在` };
     }
+    const conflictFolder = await client.query(
+      `SELECT 1 FROM folders WHERE (path = $1 OR path LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
+      [to, escapeLike(to), ...scopeParams]
+    );
+    if ((conflictFolder.rowCount ?? 0) > 0) {
+      await client.query("ROLLBACK");
+      return { ok: false, code: "conflict", message: `目标文件夹「${to}」已存在` };
+    }
+    // A folder exists when concepts, folder rows, or both occupy the subtree.
     const source = await client.query(
       `SELECT 1 FROM concepts WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
       [from, escapeLike(from), ...scopeParams]
     );
-    if ((source.rowCount ?? 0) === 0) {
+    let exists = (source.rowCount ?? 0) > 0;
+    if (!exists) {
+      const sourceFolder = await client.query(
+        `SELECT 1 FROM folders WHERE (path = $1 OR path LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
+        [from, escapeLike(from), ...scopeParams]
+      );
+      exists = (sourceFolder.rowCount ?? 0) > 0;
+    }
+    if (!exists) {
       await client.query("ROLLBACK");
       return { ok: false, code: "invalid", message: `文件夹「${from}」不存在` };
     }
@@ -225,6 +257,13 @@ export async function renameCategoryFolder(user: ScopeUser, path: string, newPat
       `UPDATE concepts
        SET category = CASE WHEN category = $1 THEN $2 ELSE $2 || substring(category FROM length($1) + 1) END
        WHERE (category = $1 OR category LIKE $3 || '/%')${ownerClauseUpdate}`,
+      user.role === "admin" ? [from, to, escapeLike(from)] : [from, to, escapeLike(from), user.id]
+    );
+    // Rewrite the entity form of the folder (and its empty subfolders) too.
+    await client.query(
+      `UPDATE folders
+       SET path = CASE WHEN path = $1 THEN $2 ELSE $2 || substring(path FROM length($1) + 1) END
+       WHERE (path = $1 OR path LIKE $3 || '/%')${ownerClauseUpdate}`,
       user.role === "admin" ? [from, to, escapeLike(from)] : [from, to, escapeLike(from), user.id]
     );
     await client.query("COMMIT");
@@ -238,18 +277,86 @@ export async function renameCategoryFolder(user: ScopeUser, path: string, newPat
   }
 }
 
-/** Delete a folder: uncategorize every concept in its subtree (content kept). */
+/** Delete a folder: uncategorize every concept in its subtree (content kept)
+ * and remove the entity form of the folder subtree. */
 export async function deleteCategoryFolder(user: ScopeUser, path: string): Promise<CategoryOpResult> {
   const from = normalizeCategory(path);
   if (!from) return { ok: false, code: "invalid", message: "路径不能为空" };
 
-  const ownerClause = user.role === "admin" ? "" : " AND owner_id = $3";
-  const res = await query(
-    `UPDATE concepts SET category = NULL WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClause}`,
-    user.role === "admin" ? [from, escapeLike(from)] : [from, escapeLike(from), user.id]
-  );
-  invalidateSearchCache();
-  return { ok: true, affected: res.rowCount ?? 0 };
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const ownerClauseUpdate = user.role === "admin" ? "" : " AND owner_id = $3";
+    const ownerClauseRead = user.role === "admin" ? "" : " AND owner_id = $3";
+    const scopeParams = user.role === "admin" ? [] : [user.id];
+    const updated = await client.query(
+      `UPDATE concepts SET category = NULL WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClauseUpdate}`,
+      user.role === "admin" ? [from, escapeLike(from)] : [from, escapeLike(from), user.id]
+    );
+    await client.query(
+      `DELETE FROM folders WHERE (path = $1 OR path LIKE $2 || '/%')${ownerClauseRead}`,
+      [from, escapeLike(from), ...scopeParams]
+    );
+    await client.query("COMMIT");
+    invalidateSearchCache();
+    return { ok: true, affected: updated.rowCount ?? 0 };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Folder paths stored as entities (empty folders); the tree unions these
+ * with concept-derived paths. */
+export async function listFolders(user: ScopeUser): Promise<string[]> {
+  const { rows } =
+    user.role === "admin"
+      ? await query<{ path: string }>("SELECT path FROM folders")
+      : await query<{ path: string }>("SELECT path FROM folders WHERE owner_id = $1", [user.id]);
+  return rows.map((r) => r.path);
+}
+
+/** Create an empty folder. Rejects paths already occupied in either form. */
+export async function createFolder(user: ScopeUser, path: string): Promise<CategoryOpResult> {
+  const to = normalizeCategory(path);
+  if (!to) return { ok: false, code: "invalid", message: "路径不能为空" };
+
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const ownerClauseRead = user.role === "admin" ? "" : " AND owner_id = $2";
+    const scopeParams = user.role === "admin" ? [] : [user.id];
+    const dupFolder = await client.query(
+      `SELECT 1 FROM folders WHERE (path = $1 OR path LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
+      [to, escapeLike(to), ...scopeParams]
+    );
+    const dupConcept = await client.query(
+      `SELECT 1 FROM concepts WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
+      [to, escapeLike(to), ...scopeParams]
+    );
+    if ((dupFolder.rowCount ?? 0) > 0 || (dupConcept.rowCount ?? 0) > 0) {
+      await client.query("ROLLBACK");
+      return { ok: false, code: "conflict", message: `文件夹「${to}」已存在` };
+    }
+    try {
+      await client.query("INSERT INTO folders (owner_id, path) VALUES ($1, $2)", [user.id, to]);
+    } catch (err) {
+      if ((err as { code?: string }).code === "23505") {
+        await client.query("ROLLBACK");
+        return { ok: false, code: "conflict", message: `文件夹「${to}」已存在` };
+      }
+      throw err;
+    }
+    await client.query("COMMIT");
+    return { ok: true, affected: 1 };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getConceptDetail(id: string, user: ScopeUser): Promise<ConceptDetail | null> {

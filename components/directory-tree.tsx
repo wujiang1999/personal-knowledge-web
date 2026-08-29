@@ -26,7 +26,8 @@ type FolderAction = "rename" | "move" | "delete";
 type FolderDialog =
   | { type: "rename"; key: string; name: string }
   | { type: "move"; key: string; parent: string }
-  | { type: "delete"; key: string };
+  | { type: "delete"; key: string }
+  | { type: "create"; path: string };
 
 function Caret({ open }: { open: boolean }) {
   return (
@@ -51,6 +52,9 @@ function lastSegment(path: string): string {
 
 /** Client-side mirror of the server's rename/move path composition. */
 function plannedNewPath(d: Exclude<FolderDialog, { type: "delete" }>): string {
+  if (d.type === "create") {
+    return d.path.split("/").map((t) => t.trim()).filter(Boolean).join("/");
+  }
   if (d.type === "rename") {
     const segs = d.key.split("/");
     segs[segs.length - 1] = d.name.trim();
@@ -321,6 +325,10 @@ export function DirectoryTree({ roots, rootConcepts }: { roots: DirectoryTreeFol
 
   async function submitDialog() {
     if (!dialog || busy) return;
+    if (dialog.type === "create" && !dialog.path.trim()) {
+      setError("路径不能为空");
+      return;
+    }
     setBusy(true);
     setError(null);
     const body =
@@ -328,7 +336,9 @@ export function DirectoryTree({ roots, rootConcepts }: { roots: DirectoryTreeFol
         ? { op: "rename", path: dialog.key, name: dialog.name }
         : dialog.type === "move"
           ? { op: "move", path: dialog.key, parent: dialog.parent }
-          : { op: "delete", path: dialog.key };
+          : dialog.type === "create"
+            ? { op: "create", path: dialog.path }
+            : { op: "delete", path: dialog.key };
     try {
       const res = await fetch("/api/categories", {
         method: "POST",
@@ -341,10 +351,17 @@ export function DirectoryTree({ roots, rootConcepts }: { roots: DirectoryTreeFol
         return;
       }
       if (dialog.type !== "delete") {
-        // Keep the moved/renamed subtree open under its new path.
-        const from = dialog.key;
+        // Keep the moved/renamed subtree open under its new path; reveal a
+        // newly created folder together with its ancestors.
         const to = plannedNewPath(dialog);
         setOpen((prev) => {
+          if (dialog.type === "create") {
+            const next = new Set(prev);
+            const segs = to.split("/");
+            for (let i = 1; i <= segs.length; i++) next.add(segs.slice(0, i).join("/"));
+            return next;
+          }
+          const from = dialog.key;
           const next = new Set<string>();
           for (const k of prev) {
             if (k === from) next.add(to);
@@ -363,15 +380,26 @@ export function DirectoryTree({ roots, rootConcepts }: { roots: DirectoryTreeFol
     }
   }
 
-  const dialogTotal = dialog ? totals.get(dialog.key) ?? 0 : 0;
-  const moveTargets = dialog?.type === "move" ? allKeys.filter((k) => k !== dialog.key && !k.startsWith(dialog.key + "/")) : [];
+  const dialogTotal = dialog && "key" in dialog ? totals.get(dialog.key) ?? 0 : 0;
+  const moveKey = dialog?.type === "move" ? dialog.key : null;
+  const moveTargets = moveKey ? allKeys.filter((k) => k !== moveKey && !k.startsWith(moveKey + "/")) : [];
   const inputClass =
     "mt-1 w-full rounded-md border border-zinc-300 px-2 py-1.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100";
 
   return (
     <div>
-      {allKeys.length > 1 && (
-        <div className="mb-2 flex justify-end">
+      <div className="mb-2 flex items-center justify-end gap-3">
+        <button
+          type="button"
+          onClick={() => {
+            setError(null);
+            setDialog({ type: "create", path: "" });
+          }}
+          className="text-xs text-zinc-400 hover:text-zinc-700 hover:underline dark:text-zinc-500 dark:hover:text-zinc-200"
+        >
+          + 新建文件夹
+        </button>
+        {allKeys.length > 1 && (
           <button
             type="button"
             onClick={() => setOpen(allOpen ? new Set() : new Set(allKeys))}
@@ -379,8 +407,8 @@ export function DirectoryTree({ roots, rootConcepts }: { roots: DirectoryTreeFol
           >
             {allOpen ? "收起全部" : "展开全部"}
           </button>
-        </div>
-      )}
+        )}
+      </div>
       {roots.map((node) => (
         <FolderNode
           key={node.key}
@@ -395,6 +423,27 @@ export function DirectoryTree({ roots, rootConcepts }: { roots: DirectoryTreeFol
       ))}
       {rootConcepts.length > 0 && <RootConceptsNode concepts={rootConcepts} open={open} toggle={toggle} />}
 
+      {dialog?.type === "create" && (
+        <DialogShell
+          title="新建文件夹"
+          busy={busy}
+          confirmLabel="创建"
+          onClose={() => setDialog(null)}
+          onConfirm={submitDialog}
+        >
+          <label className="block text-sm text-zinc-600 dark:text-zinc-300">
+            文件夹路径（支持多级，用 / 分隔）
+            <input
+              autoFocus
+              value={dialog.path}
+              onChange={(e) => setDialog({ ...dialog, path: e.target.value })}
+              placeholder="例如：技术/测试"
+              className={inputClass}
+            />
+          </label>
+          {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
+        </DialogShell>
+      )}
       {dialog?.type === "rename" && (
         <DialogShell
           title="重命名文件夹"

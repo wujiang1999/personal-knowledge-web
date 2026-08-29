@@ -58,6 +58,10 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 ## 变更历史
 
+- 2026-08-29（空文件夹，迁移 0011）：新增 `folders` 表（owner_id + path 唯一）作为文件夹的实体形态，
+  支持仪表盘「+ 新建文件夹」创建空目录（`POST /api/categories` `op=create`）。树 = folders 行 ∪
+  concepts.category 派生（`buildCategoryTree(concepts, extraFolderPaths)`）；重命名/移动同步改写
+  folders 行，删除同时清空子树 rows；冲突校验覆盖两种存在形态。
 - 2026-08-29（目录管理）：仪表盘「知识目录」升级为可折叠文件树（`components/directory-tree.tsx`），
   并补齐文件夹级操作——重命名（仅最后一级）、移动（可选新父目录，连同子树）、删除（子树条目
   移回根目录，**不删除内容**）。新增 `POST /api/categories`（`op=rename|move|delete`，lib 层
