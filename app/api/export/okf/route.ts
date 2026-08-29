@@ -10,7 +10,7 @@ export async function GET() {
   const user = await requireApiUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const concepts = await listConceptsForExport(user.id);
+  const concepts = await listConceptsForExport(user);
   const zipBuffer = await buildOkfZip(concepts, user.username);
 
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");

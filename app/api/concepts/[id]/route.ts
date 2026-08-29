@@ -21,7 +21,7 @@ export async function GET(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
-  const concept = await getConceptDetail(id, user.id);
+  const concept = await getConceptDetail(id, user);
   if (!concept) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json({ concept });
 }
@@ -34,7 +34,7 @@ export async function PATCH(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
-  const owned = await getConceptDetail(id, user.id);
+  const owned = await getConceptDetail(id, user);
   if (!owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   let body: z.infer<typeof updateSchema>;
@@ -73,7 +73,7 @@ export async function DELETE(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
-  const ok = await deleteConcept(id, user.id);
+  const ok = await deleteConcept(id, user);
   if (!ok) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json({ ok: true });
 }

@@ -18,11 +18,11 @@ export default async function KnowledgePage({
   let hasMore = false;
   if (query) {
     // Search is already ranked and capped at 50; paginating it is a follow-up.
-    results = await searchConcepts(user.id, query, 50);
+    results = await searchConcepts(user, query, 50);
   } else {
     // Fetch one extra row to detect "has more", then slice to the page.
     const fetched = await listConcepts({
-      ownerId: user.id,
+      user,
       category: category?.trim() || undefined,
       limit: PAGE_SIZE + 1,
       offset: (page - 1) * PAGE_SIZE,
@@ -99,6 +99,11 @@ export default async function KnowledgePage({
                 {c.category && <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">📁 {c.category}</span>}
                 <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">{c.type}</span>
                 <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">v{c.current_version}</span>
+                {user.role === "admin" && c.owner_id && c.owner_id !== user.id && (
+                  <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-xs text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-300">
+                    👤 {c.owner_username ?? "其他账号"}
+                  </span>
+                )}
               </div>
               {c.description && <p className="mt-0.5 text-sm text-zinc-500 line-clamp-1 dark:text-zinc-400">{c.description}</p>}
               {"body_markdown" in c && (

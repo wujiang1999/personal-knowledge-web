@@ -13,7 +13,7 @@ export default async function ConceptDetailPage({
 }) {
   const user = await requireUser();
   const { id } = await params;
-  const concept = await getConceptDetail(id, user.id);
+  const concept = await getConceptDetail(id, user);
   if (!concept) notFound();
 
   const current = concept.versions.find((v) => v.version_number === concept.current_version);

@@ -5,6 +5,6 @@ import { requireApiUser } from "@/lib/requireUser";
 export async function GET() {
   const user = await requireApiUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const sources = await listSources(user.id);
+  const sources = await listSources(user);
   return NextResponse.json({ sources });
 }

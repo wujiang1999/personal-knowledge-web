@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS users (
   username      text NOT NULL UNIQUE,
   password_hash text NOT NULL,
   token_version integer NOT NULL DEFAULT 1,
+  role          text NOT NULL DEFAULT 'user',  -- 'user' | 'admin'; admin bypasses owner scoping
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 

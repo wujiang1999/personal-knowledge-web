@@ -38,8 +38,8 @@ export async function getUserByApiKey(): Promise<AuthUser | null> {
   if (!key) return null;
 
   const hash = hashApiKey(key);
-  const { rows } = await query<{ id: string; username: string; token_version: number }>(
-    `SELECT u.id, u.username, u.token_version
+  const { rows } = await query<{ id: string; username: string; token_version: number; role: string }>(
+    `SELECT u.id, u.username, u.token_version, u.role
      FROM api_keys k
      JOIN users u ON u.id = k.user_id
      WHERE k.key_hash = $1 AND k.revoked_at IS NULL`,
@@ -53,5 +53,10 @@ export async function getUserByApiKey(): Promise<AuthUser | null> {
     () => {}
   );
 
-  return { id: rows[0].id, username: rows[0].username, tokenVersion: rows[0].token_version };
+  return {
+    id: rows[0].id,
+    username: rows[0].username,
+    tokenVersion: rows[0].token_version,
+    role: rows[0].role === "admin" ? "admin" : "user",
+  };
 }

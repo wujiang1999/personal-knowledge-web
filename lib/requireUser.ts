@@ -7,6 +7,8 @@ export interface AuthUser {
   id: string;
   username: string;
   tokenVersion: number;
+  /** 'admin' accounts bypass owner scoping and see/act on all users' data. */
+  role: "user" | "admin";
 }
 
 /**
@@ -16,15 +18,20 @@ export interface AuthUser {
 export async function requireUser(): Promise<AuthUser> {
   const session = await getSession();
   if (!session) redirect("/login");
-  const { rows } = await query<{ id: string; username: string; token_version: number }>(
-    "SELECT id, username, token_version FROM users WHERE id = $1",
+  const { rows } = await query<{ id: string; username: string; token_version: number; role: string }>(
+    "SELECT id, username, token_version, role FROM users WHERE id = $1",
     [session.sub]
   );
   // token_version is the authoritative revocation check: middleware only
   // verifies the JWT signature (it runs on Edge and cannot reach pg). A token
   // whose tv is out of date (e.g. after a password change) is rejected here.
   if (rows.length === 0 || rows[0].token_version !== session.tokenVersion) redirect("/login");
-  return { id: rows[0].id, username: rows[0].username, tokenVersion: rows[0].token_version };
+  return {
+    id: rows[0].id,
+    username: rows[0].username,
+    tokenVersion: rows[0].token_version,
+    role: rows[0].role === "admin" ? "admin" : "user",
+  };
 }
 
 /**
@@ -41,10 +48,15 @@ export async function requireApiUser(): Promise<AuthUser | null> {
   if (viaKey) return viaKey;
   const session = await getSession();
   if (!session) return null;
-  const { rows } = await query<{ id: string; username: string; token_version: number }>(
-    "SELECT id, username, token_version FROM users WHERE id = $1",
+  const { rows } = await query<{ id: string; username: string; token_version: number; role: string }>(
+    "SELECT id, username, token_version, role FROM users WHERE id = $1",
     [session.sub]
   );
   if (rows.length === 0 || rows[0].token_version !== session.tokenVersion) return null;
-  return { id: rows[0].id, username: rows[0].username, tokenVersion: rows[0].token_version };
+  return {
+    id: rows[0].id,
+    username: rows[0].username,
+    tokenVersion: rows[0].token_version,
+    role: rows[0].role === "admin" ? "admin" : "user",
+  };
 }

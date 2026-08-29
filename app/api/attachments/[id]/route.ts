@@ -33,8 +33,11 @@ export async function GET(
   const att = await getAttachment(id);
   if (!att) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const owned = await query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [att.concept_id, user.id]);
-  if (!owned.rowCount) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const owned =
+    user.role === "admin" ||
+    (await query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [att.concept_id, user.id]))
+      .rowCount === 1;
+  if (!owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const download = new URL(req.url).searchParams.get("download") === "1";
   const contentType = safeContentType(att.mime_type);
@@ -107,8 +110,11 @@ export async function DELETE(
   const att = await getAttachment(id);
   if (!att) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const owned = await query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [att.concept_id, user.id]);
-  if (!owned.rowCount) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const owned =
+    user.role === "admin" ||
+    (await query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [att.concept_id, user.id]))
+      .rowCount === 1;
+  if (!owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const deleted = await deleteAttachmentRecord(id);
   if (!deleted) return NextResponse.json({ error: "Not found" }, { status: 404 });

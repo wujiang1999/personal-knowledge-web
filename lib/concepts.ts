@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { getPool, query } from "./db";
 import { deleteAttachmentFile } from "./attachments";
+import type { ScopeUser } from "./requireUser";
 
 /** Thrown when a concept lookup by id finds no row (typed 404, not string-match). */
 export class NotFoundError extends Error {}
@@ -16,6 +17,9 @@ export interface Concept {
   current_version: number;
   created_at: string;
   updated_at: string;
+  /** Populated on list/detail/search reads; lets an admin tell whose row it is. */
+  owner_id?: string;
+  owner_username?: string;
 }
 
 export interface ConceptVersion {
@@ -66,25 +70,30 @@ export function escapeLike(needle: string): string {
 }
 
 export async function listConcepts(opts: {
-  ownerId: string;
+  user: ScopeUser;
   status?: string;
   category?: string;
   limit?: number;
   offset?: number;
 }): Promise<Concept[]> {
-  const params: unknown[] = [opts.ownerId];
-  const where: string[] = ["owner_id = $1"];
+  const params: unknown[] = [];
+  const where: string[] = [];
+  // Admin accounts transcend owner scoping: no owner filter at all.
+  if (opts.user.role !== "admin") {
+    params.push(opts.user.id);
+    where.push(`c.owner_id = $${params.length}`);
+  }
   if (opts.status) {
     params.push(opts.status);
-    where.push(`status = $${params.length}`);
+    where.push(`c.status = $${params.length}`);
   }
   if (opts.category) {
     params.push(opts.category);
-    where.push(`(category = $${params.length} OR category LIKE $${params.length} || '/%')`);
+    where.push(`(c.category = $${params.length} OR c.category LIKE $${params.length} || '/%')`);
   }
-  let sql = "SELECT * FROM concepts";
+  let sql = "SELECT c.*, ou.username AS owner_username FROM concepts c LEFT JOIN users ou ON ou.id = c.owner_id";
   if (where.length) sql += " WHERE " + where.join(" AND ");
-  sql += " ORDER BY updated_at DESC";
+  sql += " ORDER BY c.updated_at DESC";
   if (opts.limit) {
     params.push(opts.limit);
     sql += ` LIMIT $${params.length}`;
@@ -155,11 +164,17 @@ export function buildCategoryTree(concepts: Concept[]): {
   return { rootConcepts, roots };
 }
 
-export async function getConceptDetail(id: string, ownerId: string): Promise<ConceptDetail | null> {
-  const { rows } = await query<Concept>(
-    "SELECT * FROM concepts WHERE id = $1 AND owner_id = $2",
-    [id, ownerId]
-  );
+export async function getConceptDetail(id: string, user: ScopeUser): Promise<ConceptDetail | null> {
+  const { rows } =
+    user.role === "admin"
+      ? await query<Concept>(
+          "SELECT c.*, ou.username AS owner_username FROM concepts c LEFT JOIN users ou ON ou.id = c.owner_id WHERE c.id = $1",
+          [id]
+        )
+      : await query<Concept>(
+          "SELECT c.*, ou.username AS owner_username FROM concepts c LEFT JOIN users ou ON ou.id = c.owner_id WHERE c.id = $1 AND c.owner_id = $2",
+          [id, user.id]
+        );
   if (rows.length === 0) return null;
   const concept = rows[0];
   const versions = await query<ConceptVersion>(
@@ -201,11 +216,11 @@ function invalidateSearchCache(): void {
   searchCache.clear();
 }
 
-export async function searchConcepts(ownerId: string, q: string, limit = 20): Promise<SearchResult[]> {
+export async function searchConcepts(user: ScopeUser, q: string, limit = 20): Promise<SearchResult[]> {
   const needle = q.trim().slice(0, 200);
   if (!needle) return [];
 
-  const cacheKey = `${ownerId}|${needle}|${limit}`;
+  const cacheKey = `${user.id}:${user.role}|${needle}|${limit}`;
   const cached = searchCache.get(cacheKey);
   if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL) {
     return cached.rows;
@@ -223,8 +238,8 @@ export async function searchConcepts(ownerId: string, q: string, limit = 20): Pr
   const pgroonga = await hasPgroonga();
 
   // $1 = ownerId, then one LIKE param per token, then full-needle LIKE,
-  // prefix, raw needle, limit.
-  const params: unknown[] = [ownerId];
+  // prefix, raw needle, limit; role is appended last for the admin bypass.
+  const params: unknown[] = [user.id];
   const tokenConds: string[] = [];
   const coverageTerms: string[] = [];
   for (const tok of tokens) {
@@ -243,6 +258,11 @@ export async function searchConcepts(ownerId: string, q: string, limit = 20): Pr
   const qParam = `$${params.length}`;
   params.push(limit);
   const limitParam = `$${params.length}`;
+  let ownerClause = "c.owner_id = $1";
+  if (user.role === "admin") {
+    params.push(user.role);
+    ownerClause = `($${params.length}::text = 'admin' OR c.owner_id = $1)`;
+  }
 
   // WHERE branches: strict token AND is the primary path; FTS (ASCII-only),
   // trgm fuzzy (>=3 chars), and PGroonga (when installed) add recall.
@@ -265,6 +285,7 @@ export async function searchConcepts(ownerId: string, q: string, limit = 20): Pr
     SELECT
       c.id, c.type, c.title, c.description, c.status, c.tags,
       c.current_version, c.created_at, c.updated_at,
+      c.owner_id, ou.username AS owner_username,
       -- Search results only ever render a ~2-line preview (UI) or feed a
       -- truncating client (MCP bodyPreview); shipping full markdown grew the
       -- payload 5-10x. Return a match-anchored window capped at 500 chars —
@@ -288,9 +309,10 @@ export async function searchConcepts(ownerId: string, q: string, limit = 20): Pr
         + COALESCE(pgroonga_score(c), 0) * 30` : ""}
       ) AS score
     FROM concepts c
+    LEFT JOIN users ou ON ou.id = c.owner_id
     JOIN concept_versions v
       ON v.concept_id = c.id AND v.version_number = c.current_version
-    WHERE c.owner_id = $1 AND (${branches.join(" OR ")})
+    WHERE ${ownerClause} AND (${branches.join(" OR ")})
     ORDER BY score DESC, c.updated_at DESC
     LIMIT ${limitParam}
   `;
@@ -446,13 +468,17 @@ export async function addConceptVersion(
   }
 }
 
-export async function deleteConcept(id: string, ownerId: string): Promise<boolean> {
+export async function deleteConcept(id: string, user: ScopeUser): Promise<boolean> {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
     // Ownership check inside the same transaction that deletes (no TOCTOU),
     // and collect attachment disk keys before the CASCADE wipes the rows.
-    const owned = await client.query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [id, ownerId]);
+    // Admin accounts may delete any user's concept.
+    const owned =
+      user.role === "admin"
+        ? await client.query("SELECT 1 FROM concepts WHERE id = $1", [id])
+        : await client.query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [id, user.id]);
     if (owned.rowCount === 0) {
       await client.query("ROLLBACK");
       return false;
@@ -461,10 +487,10 @@ export async function deleteConcept(id: string, ownerId: string): Promise<boolea
       "SELECT storage_key FROM attachments WHERE concept_id = $1",
       [id]
     );
-    const res = await client.query(
-      "DELETE FROM concepts WHERE id = $1 AND owner_id = $2 RETURNING id",
-      [id, ownerId]
-    );
+    const res =
+      user.role === "admin"
+        ? await client.query("DELETE FROM concepts WHERE id = $1 RETURNING id", [id])
+        : await client.query("DELETE FROM concepts WHERE id = $1 AND owner_id = $2 RETURNING id", [id, user.id]);
     await client.query("COMMIT");
     const deleted = (res.rowCount ?? 0) > 0;
     // Remove disk bytes after the DB commit; any failure is logged, and the
@@ -492,14 +518,14 @@ export interface Source {
   created_at: string;
 }
 
-export async function listSources(ownerId: string): Promise<Source[]> {
+export async function listSources(user: ScopeUser): Promise<Source[]> {
   const { rows } = await query<Source>(
     `SELECT s.id, s.source_type, s.original_name, s.content_hash, s.created_at
      FROM sources s
      JOIN concepts c ON c.id = s.concept_id
-     WHERE c.owner_id = $1
+     ${user.role === "admin" ? "" : "WHERE c.owner_id = $1"}
      ORDER BY s.created_at DESC LIMIT 200`,
-    [ownerId]
+    user.role === "admin" ? [] : [user.id]
   );
   return rows;
 }
@@ -520,7 +546,7 @@ export interface ExportConcept {
   version_created_at: string;
 }
 
-export async function listConceptsForExport(ownerId: string): Promise<ExportConcept[]> {
+export async function listConceptsForExport(user: ScopeUser): Promise<ExportConcept[]> {
   const { rows } = await query<ExportConcept>(`
     SELECT
       c.id, c.type, c.title, c.description, c.category, c.status, c.tags,
@@ -529,8 +555,8 @@ export async function listConceptsForExport(ownerId: string): Promise<ExportConc
     FROM concepts c
     JOIN concept_versions v
       ON v.concept_id = c.id AND v.version_number = c.current_version
-    WHERE c.owner_id = $1
+    ${user.role === "admin" ? "" : "WHERE c.owner_id = $1"}
     ORDER BY c.updated_at DESC
-  `, [ownerId]);
+  `, user.role === "admin" ? [] : [user.id]);
   return rows;
 }

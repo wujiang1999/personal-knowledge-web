@@ -3,7 +3,7 @@ import { listSources } from "@/lib/concepts";
 
 export default async function SourcesPage() {
   const user = await requireUser();
-  const sources = await listSources(user.id);
+  const sources = await listSources(user);
 
   return (
     <div className="space-y-6">

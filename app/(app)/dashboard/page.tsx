@@ -54,7 +54,7 @@ function DirectoryTree({ roots, rootConcepts }: { roots: CategoryTreeNode[]; roo
 
 export default async function DashboardPage() {
   const user = await requireUser();
-  const [allConcepts, sources] = await Promise.all([listConcepts({ ownerId: user.id }), listSources(user.id)]);
+  const [allConcepts, sources] = await Promise.all([listConcepts({ user }), listSources(user)]);
   // listConcepts orders by updated_at DESC, so the top 10 are the most recent.
   const recent = allConcepts.slice(0, 10);
 
