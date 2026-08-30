@@ -58,6 +58,22 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 ## 变更历史
 
+- 2026-08-30（Next 16 升级 + 健壮性优化，c5a7562/5cfd630）：Next 15.5.23 → **16.3.3**（清零
+  npm audit 3 个 high：内置 postcss/sharp）；`middleware.ts` 迁移为 **`proxy.ts`** 约定、
+  body-size 配置键改为 `experimental.proxyClientMaxBodySize`；eslint-config-next@16 原生
+  flat config（弃用 FlatCompat）。健壮性批次：① `lib/withRoute` 统一包装全部 API 路由
+  （域错误→404/413，未知异常→带路由名日志 + JSON 500，此前是哑 500 无服务端日志）；②
+  `[id]` 路由先做 UUID 校验（非法 id 由 pg 22P02 → 500 改为干净 404）；③ 迁移 **0012**：
+  `sources(content_hash, concept_id)`（每次存版本的去重探测此前全表扫）+ `concepts(owner_id,
+  category)`；④ 客户端 5 个组件 fetch 补 try/catch（网络失败此前静默卡死 loading），
+  logout 失败不再强制跳登录页；⑤ 搜索支持 `?offset=` + 返回 `total`（`COUNT(*) OVER()`，
+  statement 升 `search_v2`），/knowledge 搜索结果与列表一致分页；⑥ 内联预览判定抽到
+  `lib/attachment-mime.ts` 服务端/客户端同源（SVG 不再出现 UI 给预览、服务端强制下载的漂移）。
+  运维注意：`deploy.sh` 以 root 运行会在检出内留下 root 属主文件（本次 `app/api/categories`
+  即因此阻塞 knowledge-web 的 git 快进），已整体 `chown -R knowledge-web`；后续若再遇
+  unlink 权限错误，先检查属主。同日 MCP 工具升级（963625d，独立仓库
+  personal-knowledge-web-mcp）：`kb_get_concept` 默认仅当前版本（`versions="all"` 才返回
+  历史版本，防上下文膨胀）、`kb_whoami` 缓存 60s、幂等 GET 对网络错误/5xx 重试一次。
 - 2026-08-29（空文件夹，迁移 0011）：新增 `folders` 表（owner_id + path 唯一）作为文件夹的实体形态，
   支持仪表盘「+ 新建文件夹」创建空目录（`POST /api/categories` `op=create`）。树 = folders 行 ∪
   concepts.category 派生（`buildCategoryTree(concepts, extraFolderPaths)`）；重命名/移动同步改写
