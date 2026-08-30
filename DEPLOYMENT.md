@@ -65,13 +65,18 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
   `generated_by=llm:ingest:<model>`。**② 自动摘要**——条目创建/新版本且 description 为空时，
   `lib/summary.ts` 异步（fire-and-forget）生成一句话描述回填 concepts + 当前版本行（无新版本）；
   绝不覆盖人工描述；失败仅记日志；开关 `LLM_AUTO_SUMMARY`（线上已开）。挂接点在两条写路由。
-  **③ pgvector 语义搜索（代码就绪、待激活）**——迁移 0013 建 `concept_embeddings`（vector 扩展缺失
-  时 NOTICE 跳过，`ensureSemanticSchema` 可后补）；`lib/semantic.ts` 提供向量检索候选 + RRF 融合，
-  `searchConcepts` 首页结果与向量近邻重排融合（无 embedding 配置时完全退化为词法检索）；
-  `npm run db:embed-backfill` 全量向量化并钉维度 + 建 hnsw 索引。**激活前提**：服务器安装
-  postgresql-16-pgvector 包（apt，待用户批准）→ superuser `CREATE EXTENSION vector` →
-  .env 配 `LLM_EMBEDDING_*`（BASE_URL/API_KEY 缺省回退 LLM_*；MODEL、DIMENSIONS 必填）→
-  跑 backfill。LLM 配置注入：服务器 .env 增 `LLM_BASE_URL/LLM_API_KEY/LLM_MODEL`（复用 MCP 的
+  **③ pgvector 语义搜索（代码就绪；地基已完成，待 embedding key 激活）**——迁移 0013 建
+  `concept_embeddings`（vector 扩展缺失时 NOTICE 跳过，`ensureSemanticSchema` 可后补）；
+  `lib/semantic.ts` 提供向量检索候选 + RRF 融合，`searchConcepts` 首页结果与向量近邻重排融合
+  （无 embedding 配置时完全退化为词法检索）。**已完成（2026-08-30，用户批准装包）**：
+  `apt install postgresql-16-pgvector` + knowledge 库 `CREATE EXTENSION vector`（0.6.0）；
+  已探测确认现有 DeepSeek 端点无 `/embeddings` 能力（仅对话模型）。**剩余激活三步**（拿到
+  embedding key 后）：① .env 追加 `LLM_EMBEDDING_MODEL=<模型>` 与 `LLM_EMBEDDING_DIMENSIONS=<维度>`
+  （BASE_URL/API_KEY 缺省回退 LLM_*；DashScope text-embedding-v4 = 1024 维、SiliconFlow
+  BAAI/bge-m3 = 1024 维）② `sudo bash -c 'cd /opt/personal-knowledge-web && npm run db:embed-backfill'`
+  （自动建表 + 钉维度 + hnsw 索引 + 全量向量化，幂等可重跑）③
+  `sudo systemctl restart personal-knowledge-web`（`hasSemanticSearch` 探测按进程缓存，必须重启生效）。
+  LLM 配置注入：服务器 .env 增 `LLM_BASE_URL/LLM_API_KEY/LLM_MODEL`（复用 MCP 的
   DeepSeek 配置，stdin 直写不回显）。线上验收：ingest dry-run/写入/查重、自动摘要 ~5s 回填、
   测试数据全部删除。`ConceptInput.generatedBy` 记录机器来源。
 - 2026-08-30（Next 16 升级 + 健壮性优化，c5a7562/5cfd630）：Next 15.5.23 → **16.3.3**（清零
