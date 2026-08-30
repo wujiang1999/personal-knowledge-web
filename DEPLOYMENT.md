@@ -58,6 +58,22 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 ## 变更历史
 
+- 2026-08-30（应用侧 LLM 三件套，731de55）：**① ingest 流水线产品化**——`npm run ingest -- <file.md>
+  [--write] [--category 前缀] [--max N]`：Markdown 按标题/段落分块（`lib/ingest.ts`，≤2800 字符/块、
+  小碎片前向合并）→ LLM 原子化提取（OpenAI 兼容，默认 dry-run，`--write` 才落库）→ 标题检索查重
+  （score ≥60 或标题全同则跳过，与 MCP 规则降级同阈值）→ `createConcept` 带
+  `generated_by=llm:ingest:<model>`。**② 自动摘要**——条目创建/新版本且 description 为空时，
+  `lib/summary.ts` 异步（fire-and-forget）生成一句话描述回填 concepts + 当前版本行（无新版本）；
+  绝不覆盖人工描述；失败仅记日志；开关 `LLM_AUTO_SUMMARY`（线上已开）。挂接点在两条写路由。
+  **③ pgvector 语义搜索（代码就绪、待激活）**——迁移 0013 建 `concept_embeddings`（vector 扩展缺失
+  时 NOTICE 跳过，`ensureSemanticSchema` 可后补）；`lib/semantic.ts` 提供向量检索候选 + RRF 融合，
+  `searchConcepts` 首页结果与向量近邻重排融合（无 embedding 配置时完全退化为词法检索）；
+  `npm run db:embed-backfill` 全量向量化并钉维度 + 建 hnsw 索引。**激活前提**：服务器安装
+  postgresql-16-pgvector 包（apt，待用户批准）→ superuser `CREATE EXTENSION vector` →
+  .env 配 `LLM_EMBEDDING_*`（BASE_URL/API_KEY 缺省回退 LLM_*；MODEL、DIMENSIONS 必填）→
+  跑 backfill。LLM 配置注入：服务器 .env 增 `LLM_BASE_URL/LLM_API_KEY/LLM_MODEL`（复用 MCP 的
+  DeepSeek 配置，stdin 直写不回显）。线上验收：ingest dry-run/写入/查重、自动摘要 ~5s 回填、
+  测试数据全部删除。`ConceptInput.generatedBy` 记录机器来源。
 - 2026-08-30（Next 16 升级 + 健壮性优化，c5a7562/5cfd630）：Next 15.5.23 → **16.3.3**（清零
   npm audit 3 个 high：内置 postcss/sharp）；`middleware.ts` 迁移为 **`proxy.ts`** 约定、
   body-size 配置键改为 `experimental.proxyClientMaxBodySize`；eslint-config-next@16 原生
