@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createConcept, listConcepts, type ConceptInput } from "@/lib/concepts";
 import { requireApiUser } from "@/lib/requireUser";
 import { withRoute } from "@/lib/withRoute";
+import { maybeQueueAutoSummary } from "@/lib/summary";
 
 const createSchema = z.object({
   type: z.string().min(1).max(64).default("Note"),
@@ -50,5 +51,6 @@ export const POST = withRoute("POST /api/concepts", async (req: Request) => {
     body: body.body,
   };
   const id = await createConcept(input, user);
+  maybeQueueAutoSummary(id);
   return NextResponse.json({ id }, { status: 201 });
 });

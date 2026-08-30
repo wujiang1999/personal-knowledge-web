@@ -3,6 +3,7 @@ import { z } from "zod";
 import { addConceptVersion, deleteConcept, getConceptDetail, type ConceptInput } from "@/lib/concepts";
 import { requireApiUser } from "@/lib/requireUser";
 import { isUuid, withRoute } from "@/lib/withRoute";
+import { maybeQueueAutoSummary } from "@/lib/summary";
 
 const updateSchema = z.object({
   type: z.string().min(1).max(64).default("Note"),
@@ -59,6 +60,7 @@ export const PATCH = withRoute(
     // A NotFoundError from the version race (row deleted mid-request) maps to
     // 404 in withRoute.
     const result = await addConceptVersion(id, input, user.username);
+    if (result.created) maybeQueueAutoSummary(id);
     return NextResponse.json({ version: result.version, created: result.created });
   }
 );

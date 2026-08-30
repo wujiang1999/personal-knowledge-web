@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { getPool, query } from "./db";
 import { deleteAttachmentFile } from "./attachments";
 import type { ScopeUser } from "./requireUser";
+import { hasSemanticSearch, rerankWithSemantic } from "./semantic";
 
 /** Thrown when a concept lookup by id finds no row (typed 404, not string-match). */
 export class NotFoundError extends Error {}
@@ -50,6 +51,9 @@ export interface ConceptInput {
   tags?: string[];
   status?: string;
   body: string;
+  /** Version-row provenance marker; defaults to `human:<username>`. Ingest
+   * pipelines pass e.g. `llm:ingest:<model>` for machine-created versions. */
+  generatedBy?: string;
 }
 
 export function sha256Hex(input: string): string {
@@ -407,7 +411,9 @@ const searchCache = new Map<string, { at: number; results: SearchResult[]; total
 const SEARCH_CACHE_TTL = Number(process.env.SEARCH_CACHE_TTL_MS ?? 60_000);
 const SEARCH_CACHE_MAX = Number(process.env.SEARCH_CACHE_MAX ?? 200);
 
-function invalidateSearchCache(): void {
+/** Drop every cached search result — called on any concept mutation, and by
+ * lib/summary when it backfills a description after the fact. */
+export function invalidateSearchCache(): void {
   searchCache.clear();
 }
 
@@ -425,7 +431,6 @@ export async function searchConcepts(
   if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL) {
     return { results: cached.results, total: cached.total };
   }
-
   // Tokenize on whitespace/punctuation. Every token must appear in
   // title/description/body — AND semantics the raw-needle ILIKE cannot
   // express — and the score gains a token-coverage term.
@@ -525,6 +530,8 @@ export async function searchConcepts(
   // SET LOCAL keeps the thresholds session-scoped: the pooled connection is
   // returned clean after COMMIT/ROLLBACK.
   const client = await getPool().connect();
+  let lexicalResults: SearchResult[];
+  let total: number;
   try {
     await client.query("BEGIN");
     if (hasTrigrams) {
@@ -543,23 +550,41 @@ export async function searchConcepts(
     await client.query("COMMIT");
     // count(*) over() rides on the rows; an offset past the end has no rows
     // and therefore reports total 0 — the UI simply shows an empty page.
-    const total = rows.length > 0 ? Number(rows[0].total_count) : 0;
-    const results: SearchResult[] = rows.map(({ total_count, ...r }) => {
+    total = rows.length > 0 ? Number(rows[0].total_count) : 0;
+    lexicalResults = rows.map(({ total_count, ...r }) => {
       void total_count;
       return r;
     });
-    if (searchCache.size >= SEARCH_CACHE_MAX) {
-      const oldest = searchCache.keys().next().value;
-      if (oldest !== undefined) searchCache.delete(oldest);
-    }
-    searchCache.set(cacheKey, { at: Date.now(), results, total });
-    return { results, total };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
   }
+
+  // Semantic recall expansion (pgvector, entirely optional): rerank the
+  // lexical window together with nearest-embedding neighbors via RRF. Only
+  // on the first page so deeper pages keep predictable paging. Runs outside
+  // the pooled connection (the embedding HTTP call must not hold one), and
+  // any failure degrades to lexical-only.
+  let results = lexicalResults;
+  if (offset === 0 && results.length > 0 && (await hasSemanticSearch())) {
+    try {
+      results = await rerankWithSemantic(user, needle, lexicalResults, limit);
+    } catch (err) {
+      console.error(
+        "[semantic] rerank failed, lexical only:",
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+
+  if (searchCache.size >= SEARCH_CACHE_MAX) {
+    const oldest = searchCache.keys().next().value;
+    if (oldest !== undefined) searchCache.delete(oldest);
+  }
+  searchCache.set(cacheKey, { at: Date.now(), results, total });
+  return { results, total };
 }
 
 export async function createConcept(input: ConceptInput, user: { id: string; username: string }): Promise<string> {
@@ -588,7 +613,7 @@ export async function createConcept(input: ConceptInput, user: { id: string; use
     // Version 1 carries a metadata snapshot so past versions stay reconstructable.
     await client.query(
       "INSERT INTO concept_versions (concept_id, version_number, title, description, category, tags, status, type, body_markdown, content_hash, generated_by) VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-      [conceptId, title, description, category, tags, status, type, body, contentHash, `human:${user.username}`]
+      [conceptId, title, description, category, tags, status, type, body, contentHash, input.generatedBy ?? `human:${user.username}`]
     );
     await client.query("COMMIT");
     invalidateSearchCache();
@@ -663,7 +688,7 @@ export async function addConceptVersion(
     }
     await client.query(
       "INSERT INTO concept_versions (concept_id, version_number, title, description, category, tags, status, type, body_markdown, content_hash, generated_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
-      [id, nextVersion, metadata.title, metadata.description, metadata.category, metadata.tags, metadata.status, metadata.type, body, contentHash, `human:${username}`]
+      [id, nextVersion, metadata.title, metadata.description, metadata.category, metadata.tags, metadata.status, metadata.type, body, contentHash, input.generatedBy ?? `human:${username}`]
     );
     await client.query(
       "UPDATE concepts SET current_version = $2, title = $3, description = $4, category = $5, tags = $6, type = $7, status = $8, updated_at = now() WHERE id = $1",
