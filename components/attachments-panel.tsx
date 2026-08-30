@@ -40,16 +40,25 @@ export function AttachmentsPanel({ conceptId }: { conceptId: string }) {
   const [text, setText] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
-    const res = await fetch(`/api/concepts/${conceptId}/attachments`);
-    if (res.ok) {
-      const data = await res.json();
-      setItems(data.attachments ?? []);
+    try {
+      const res = await fetch(`/api/concepts/${conceptId}/attachments`);
+      if (res.ok) {
+        const data = await res.json();
+        setItems(data.attachments ?? []);
+      } else {
+        setError("加载附件列表失败");
+      }
+    } catch {
+      setError("加载附件列表失败（网络错误）");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [conceptId]);
 
   useEffect(() => {
-    void refresh();
+    void (async () => {
+      await refresh();
+    })();
   }, [refresh]);
 
   async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
@@ -105,10 +114,16 @@ export function AttachmentsPanel({ conceptId }: { conceptId: string }) {
 
   async function onDelete(id: string) {
     if (!confirm("删除该附件？")) return;
-    const res = await fetch(`/api/attachments/${id}`, { method: "DELETE" });
-    if (res.ok) {
-      setPreview(null);
-      await refresh();
+    try {
+      const res = await fetch(`/api/attachments/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        setPreview(null);
+        await refresh();
+      } else {
+        setError("删除附件失败");
+      }
+    } catch {
+      setError("删除附件失败（网络错误）");
     }
   }
 

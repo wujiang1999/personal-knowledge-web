@@ -37,17 +37,17 @@ function publicRequestUrl(req: NextRequest): URL {
   return url;
 }
 
-export async function middleware(req: NextRequest) {
+export default async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const isPublic = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));
   const isLoginApi = pathname === LOGIN_API;
   const isPublicApi = PUBLIC_API_PATHS.some((p) => pathname === p);
   const isApi = pathname.startsWith("/api/");
 
-  // A Bearer API key cannot be validated here (Edge runtime has no DB access,
-  // and node:crypto is unavailable): let the request reach the route handler,
-  // where requireApiUser resolves the key against the database and answers
-  // 401 itself. Every protected /api route performs that check.
+  // A Bearer API key cannot be validated here (the proxy has no DB access):
+  // let the request reach the route handler, where requireApiUser resolves
+  // the key against the database and answers 401 itself. Every protected /api
+  // route performs that check.
   const hasBearer = (req.headers.get("authorization") ?? "").startsWith("Bearer ");
 
   const valid = hasBearer || (await isValidSession(req));
