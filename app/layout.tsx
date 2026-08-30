@@ -4,6 +4,9 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "知识库",
   description: "个人知识库 · OKF v0.2 导出",
+  icons: {
+    icon: [{ url: "/icon.png", type: "image/png" }],
+  },
 };
 
 const themeInitScript = `(function(){try{var t=localStorage.getItem('theme');var d=t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(d){document.documentElement.classList.add('dark')}}catch(e){}})();`;
