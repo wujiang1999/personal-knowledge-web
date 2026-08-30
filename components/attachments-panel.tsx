@@ -1,6 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+// Same classification the server uses to decide inline vs download, so the
+// UI can never offer a preview the API will refuse to render.
+import { previewKindFor as previewKind } from "@/lib/attachment-mime";
 
 interface Attachment {
   id: string;
@@ -8,18 +11,6 @@ interface Attachment {
   mime_type: string;
   size_bytes: number;
   created_at: string;
-}
-
-type PreviewKind = "image" | "pdf" | "text" | "audio" | "video" | "other";
-
-function previewKind(mime: string): PreviewKind {
-  const m = (mime || "").toLowerCase();
-  if (m.startsWith("image/")) return "image";
-  if (m === "application/pdf") return "pdf";
-  if (m.startsWith("audio/")) return "audio";
-  if (m.startsWith("video/")) return "video";
-  if (m.startsWith("text/") && m !== "text/html") return "text";
-  return "other";
 }
 
 function formatBytes(n: number): string {

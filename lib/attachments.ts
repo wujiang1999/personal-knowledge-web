@@ -177,32 +177,10 @@ export async function deleteAttachmentRecord(id: string): Promise<Attachment | n
   return rows.length ? rowToAttachment(rows[0]) : null;
 }
 
-/**
- * MIME types that may be rendered inline in the browser without executing
- * scripts. Deliberately excludes image/svg+xml and any `image/*+xml` (stored
- * XSS: an SVG opened as a same-origin top-level document runs its inline
- * <script>), image/x-icon, text/html, etc.
- */
-const INLINE_SAFE_IMAGES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "image/avif",
-]);
-
-/** Whether a mime type should render inline in the browser (vs. download). */
-export function isInlinePreviewable(mime: string): boolean {
-  const m = (mime || "").toLowerCase();
-  if (m === "text/html") return false; // never render HTML inline (XSS)
-  if (m.startsWith("image/")) return INLINE_SAFE_IMAGES.has(m);
-  return (
-    m === "application/pdf" ||
-    m.startsWith("text/") ||
-    m.startsWith("audio/") ||
-    m.startsWith("video/")
-  );
-}
+// Inline-safety classification lives in the shared pure module (the browser
+// components import the same logic); re-exported here for the API routes.
+import { INLINE_SAFE_IMAGES } from "./attachment-mime";
+export { isInlinePreviewable, previewKindFor } from "./attachment-mime";
 
 /** Sanitize a stored mime before serving it back to the browser. */
 export function safeContentType(mime: string): string {

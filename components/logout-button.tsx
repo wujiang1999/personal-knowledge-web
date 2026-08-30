@@ -8,21 +8,21 @@ export function LogoutButton() {
   async function logout() {
     try {
       const res = await fetch("/api/auth/logout", { method: "POST" });
-      if (res.ok) {
+      // A 401 means the session is already dead — /login is where the user
+      // wants to be anyway. Only a real server/network failure stays put, so
+      // the user keeps their page and can retry.
+      if (res.ok || res.status === 401) {
         // Server invalidated the token_version; clear the now-dead cookie so
-        // the next request doesn't briefly appear signed-in before middleware
-        // catches it. httpOnly cookies can't be deleted via JS, but middleware
+        // the next request doesn't briefly appear signed-in before proxy
+        // catches it. httpOnly cookies can't be deleted via JS, but the proxy
         // redirects to /login anyway once the session is stale.
         router.push("/login");
         router.refresh();
         return;
       }
+      alert("退出失败，请稍后重试");
     } catch {
-      // 网络/服务失败时 httpOnly cookie 无法在客户端清除；仍跳登录页，
-      // 由服务端 middleware 决定后续（token 已失效则弹回 login）。
-    } finally {
-      router.push("/login");
-      router.refresh();
+      alert("退出失败（网络错误），请稍后重试");
     }
   }
 

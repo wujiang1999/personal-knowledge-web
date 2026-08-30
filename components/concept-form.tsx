@@ -54,29 +54,34 @@ export function ConceptForm({
     const url = mode === "create" ? "/api/concepts" : `/api/concepts/${initial?.id}`;
     const method = mode === "create" ? "POST" : "PATCH";
 
-    const res = await fetch(url, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    setLoading(false);
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
-    if (!res.ok) {
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "保存失败");
+        return;
+      }
+
       const data = await res.json().catch(() => ({}));
-      setError(data.error ?? "保存失败");
-      return;
-    }
+      if (mode === "edit" && data.created === false) {
+        setError("");
+        setNotice("正文没有变化，未生成新版本；标题 / 标签等元信息已保存。");
+        router.refresh(); // 让服务端组件重新渲染，标题/标签等元信息立即更新
+        return;
+      }
 
-    const data = await res.json().catch(() => ({}));
-    if (mode === "edit" && data.created === false) {
-      setError("");
-      setNotice("正文没有变化，未生成新版本；标题 / 标签等元信息已保存。");
-      router.refresh(); // 让服务端组件重新渲染，标题/标签等元信息立即更新
-      return;
+      router.push(mode === "create" ? `/knowledge/${data.id}` : `/knowledge/${initial?.id}`);
+      router.refresh();
+    } catch {
+      setError("网络错误，请稍后重试");
+    } finally {
+      setLoading(false);
     }
-
-    router.push(mode === "create" ? `/knowledge/${data.id}` : `/knowledge/${initial?.id}`);
-    router.refresh();
   }
 
   return (

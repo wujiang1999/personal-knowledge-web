@@ -16,21 +16,26 @@ export function LoginForm({ next }: { next?: string }) {
     setLoading(true);
     setError("");
     const fd = new FormData(e.currentTarget);
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: fd.get("username"), password: fd.get("password") }),
-    });
-    setLoading(false);
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setError(data.error ?? "登录失败");
-      return;
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: fd.get("username"), password: fd.get("password") }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "登录失败");
+        return;
+      }
+      // 只允许站内相对路径，防止开放重定向
+      const dest = next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+      router.push(dest);
+      router.refresh();
+    } catch {
+      setError("网络错误，请稍后重试");
+    } finally {
+      setLoading(false);
     }
-    // 只允许站内相对路径，防止开放重定向
-    const dest = next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
-    router.push(dest);
-    router.refresh();
   }
 
   return (

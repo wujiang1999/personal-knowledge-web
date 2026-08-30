@@ -8,7 +8,9 @@ export function getPool(): Pool {
   if (!globalForDb.pgPool) {
     globalForDb.pgPool = new Pool({
       connectionString: getDatabaseUrl(),
-      max: 5,
+      // Tunable so a busier co-hosted box can be accommodated without a code
+      // change; 5 fits this app's single-node scale.
+      max: Number(process.env.PG_POOL_MAX ?? 5),
       statement_timeout: 10_000, // kill slow queries instead of hanging requests
     });
     // Without a listener, an idle-client connection reset (e.g. a tunnel blip

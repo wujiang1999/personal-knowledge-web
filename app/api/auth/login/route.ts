@@ -4,6 +4,7 @@ import { query } from "@/lib/db";
 import { verifyPassword } from "@/lib/password";
 import { createSession } from "@/lib/auth";
 import { isThrottled, recordFailure, clearFailures, THROTTLE_LOCK_SECONDS } from "@/lib/throttle";
+import { withRoute } from "@/lib/withRoute";
 
 const schema = z.object({
   username: z.string().min(1).max(64),
@@ -28,7 +29,7 @@ function clientIp(req: NextRequest): string {
   return req.headers.get("x-real-ip")?.trim() || "unknown";
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withRoute("POST /api/auth/login", async (req: NextRequest) => {
   let body: z.infer<typeof schema>;
   try {
     body = schema.parse(await req.json());
@@ -67,4 +68,4 @@ export async function POST(req: NextRequest) {
   clearFailures(body.username, ip);
   await createSession({ id: user.id, username: user.username, tokenVersion: user.token_version });
   return NextResponse.json({ ok: true, username: user.username });
-}
+});

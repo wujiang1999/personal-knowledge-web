@@ -121,6 +121,9 @@ CREATE INDEX IF NOT EXISTS idx_concepts_title_pgroonga ON concepts USING pgroong
 -- migration-added on existing databases; creating the index here would fail
 -- before 0002 runs).
 CREATE INDEX IF NOT EXISTS idx_attachments_concept_id ON attachments (concept_id);
+-- Added by db/migrations/0012: dedup probe on version save + category tree ops.
+CREATE INDEX IF NOT EXISTS idx_sources_hash_concept ON sources (content_hash, concept_id);
+CREATE INDEX IF NOT EXISTS idx_concepts_owner_category ON concepts (owner_id, category);
 
 -- -------------------------------
 -- tsvector maintenance trigger

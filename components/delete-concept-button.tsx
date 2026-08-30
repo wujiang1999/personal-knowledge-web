@@ -12,14 +12,19 @@ export function DeleteConceptButton({ id }: { id: string }) {
       return;
     }
     setLoading(true);
-    const res = await fetch(`/api/concepts/${id}`, { method: "DELETE" });
-    setLoading(false);
-    if (!res.ok) {
-      alert("删除失败");
-      return;
+    try {
+      const res = await fetch(`/api/concepts/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        alert("删除失败");
+        return;
+      }
+      router.push("/knowledge");
+      router.refresh();
+    } catch {
+      alert("删除失败（网络错误）");
+    } finally {
+      setLoading(false);
     }
-    router.push("/knowledge");
-    router.refresh();
   }
 
   return (

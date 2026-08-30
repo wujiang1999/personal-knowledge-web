@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { requireApiUser } from "@/lib/requireUser";
 import { query } from "@/lib/db";
+import { isUuid, withRoute } from "@/lib/withRoute";
 import {
   attachmentFilePath,
   deleteAttachmentFile,
@@ -22,16 +23,16 @@ function contentDisposition(kind: "inline" | "attachment", name: string): string
 }
 
 /** Serve the file bytes (inline preview by default; ?download=1 forces download). */
-export async function GET(
-  req: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const user = await requireApiUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+export const GET = withRoute(
+  "GET /api/attachments/[id]",
+  async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
+    const user = await requireApiUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { id } = await params;
-  const att = await getAttachment(id);
-  if (!att) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const { id } = await params;
+    if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const att = await getAttachment(id);
+    if (!att) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const owned =
     user.role === "admin" ||
@@ -97,27 +98,29 @@ export async function GET(
     status: 200,
     headers: { ...baseHeaders, "Content-Length": String(fileStat.size) },
   });
-}
+  }
+);
 
-export async function DELETE(
-  _req: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const user = await requireApiUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+export const DELETE = withRoute(
+  "DELETE /api/attachments/[id]",
+  async (_req: Request, { params }: { params: Promise<{ id: string }> }) => {
+    const user = await requireApiUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { id } = await params;
-  const att = await getAttachment(id);
-  if (!att) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const { id } = await params;
+    if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const att = await getAttachment(id);
+    if (!att) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const owned =
-    user.role === "admin" ||
-    (await query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [att.concept_id, user.id]))
-      .rowCount === 1;
-  if (!owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const owned =
+      user.role === "admin" ||
+      (await query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [att.concept_id, user.id]))
+        .rowCount === 1;
+    if (!owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const deleted = await deleteAttachmentRecord(id);
-  if (!deleted) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  await deleteAttachmentFile(deleted.storage_key);
-  return NextResponse.json({ ok: true });
-}
+    const deleted = await deleteAttachmentRecord(id);
+    if (!deleted) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    await deleteAttachmentFile(deleted.storage_key);
+    return NextResponse.json({ ok: true });
+  }
+);

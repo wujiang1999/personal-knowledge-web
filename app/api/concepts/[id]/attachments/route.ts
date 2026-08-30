@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { open } from "node:fs/promises";
 import { query } from "@/lib/db";
 import { requireApiUser } from "@/lib/requireUser";
+import { isUuid, withRoute } from "@/lib/withRoute";
 import {
   AttachmentTooLargeError,
   attachmentBytesForOwner,
@@ -18,39 +19,40 @@ import {
 export const runtime = "nodejs";
 
 /** List attachments for a concept. */
-export async function GET(
-  _req: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const user = await requireApiUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+export const GET = withRoute(
+  "GET /api/concepts/[id]/attachments",
+  async (_req: Request, { params }: { params: Promise<{ id: string }> }) => {
+    const user = await requireApiUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { id } = await params;
-  const owned =
-    user.role === "admin" ||
-    (await query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [id, user.id])).rowCount === 1;
-  if (!owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  const attachments = await listAttachments(id);
-  return NextResponse.json({ attachments });
-}
+    const { id } = await params;
+    if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const owned =
+      user.role === "admin" ||
+      (await query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [id, user.id])).rowCount === 1;
+    if (!owned) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const attachments = await listAttachments(id);
+    return NextResponse.json({ attachments });
+  }
+);
 
 /**
  * Upload one attachment as a raw binary body (no multipart): the client sends
  * the file bytes directly with `X-Filename` and `X-Mime` headers. Streaming the
  * body to disk keeps a 100 MB upload out of memory.
  */
-export async function PUT(
-  req: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const user = await requireApiUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+export const PUT = withRoute(
+  "PUT /api/concepts/[id]/attachments",
+  async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
+    const user = await requireApiUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { id } = await params;
-  const found =
-    user.role === "admin" ||
-    (await query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [id, user.id])).rowCount === 1;
-  if (!found) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const { id } = await params;
+    if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const found =
+      user.role === "admin" ||
+      (await query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [id, user.id])).rowCount === 1;
+    if (!found) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   if (!req.body) return NextResponse.json({ error: "missing body" }, { status: 400 });
 
@@ -124,4 +126,5 @@ export async function PUT(
     throw err;
   });
   return NextResponse.json({ attachment }, { status: 201 });
-}
+  }
+);

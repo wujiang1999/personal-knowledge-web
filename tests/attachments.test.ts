@@ -7,6 +7,7 @@ import {
   sniffMime,
   validateDeclaredMime,
 } from "../lib/attachments";
+import { previewKindFor } from "../lib/attachment-mime";
 
 const PNG_HEAD = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
 const JPEG_HEAD = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0]);
@@ -26,6 +27,26 @@ describe("isInlinePreviewable", () => {
     expect(isInlinePreviewable("text/html")).toBe(false);
     expect(isInlinePreviewable("image/x-icon")).toBe(false);
     expect(isInlinePreviewable("image/tiff")).toBe(false);
+  });
+});
+
+describe("previewKindFor", () => {
+  it("classifies renderable kinds", () => {
+    expect(previewKindFor("image/png")).toBe("image");
+    expect(previewKindFor("application/pdf")).toBe("pdf");
+    expect(previewKindFor("text/plain")).toBe("text");
+    expect(previewKindFor("audio/mpeg")).toBe("audio");
+    expect(previewKindFor("video/mp4")).toBe("video");
+  });
+
+  it("is download-only exactly when inline preview is refused", () => {
+    // The client UI derives its preview buttons from this function; the
+    // server refuses inline for the same set. SVG used to drift (UI offered
+    // an <img> preview the server answered with a download).
+    for (const m of ["image/svg+xml", "text/html", "image/x-icon", "image/tiff", "application/zip", ""]) {
+      expect(previewKindFor(m)).toBe("other");
+      expect(isInlinePreviewable(m)).toBe(false);
+    }
   });
 });
 

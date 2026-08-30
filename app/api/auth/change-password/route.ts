@@ -4,13 +4,14 @@ import { query } from "@/lib/db";
 import { verifyPassword, hashPassword } from "@/lib/password";
 import { requireApiUser } from "@/lib/requireUser";
 import { createSession } from "@/lib/auth";
+import { withRoute } from "@/lib/withRoute";
 
 const schema = z.object({
   currentPassword: z.string().min(1).max(256),
   newPassword: z.string().min(8).max(256),
 });
 
-export async function POST(req: Request) {
+export const POST = withRoute("POST /api/auth/change-password", async (req: Request) => {
   const user = await requireApiUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -40,4 +41,4 @@ export async function POST(req: Request) {
   );
   await createSession({ id: fresh[0].id, username: fresh[0].username, tokenVersion: fresh[0].token_version });
   return NextResponse.json({ ok: true });
-}
+});

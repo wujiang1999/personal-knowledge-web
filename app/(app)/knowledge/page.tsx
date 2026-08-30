@@ -15,10 +15,15 @@ export default async function KnowledgePage({
   const page = Math.max(1, Number(pageParam) || 1);
 
   let results: (Awaited<ReturnType<typeof listConcepts>>[number] & { body_markdown?: string })[];
+  let total: number | null = null;
   let hasMore = false;
   if (query) {
-    // Search is already ranked and capped at 50; paginating it is a follow-up.
-    results = await searchConcepts(user, query, 50);
+    // Ranked search, paginated the same way as the list view; the query also
+    // returns the total match count for the pager.
+    const { results: r, total: t } = await searchConcepts(user, query, PAGE_SIZE, (page - 1) * PAGE_SIZE);
+    results = r;
+    total = t;
+    hasMore = page * PAGE_SIZE < t;
   } else {
     // Fetch one extra row to detect "has more", then slice to the page.
     const fetched = await listConcepts({
@@ -74,7 +79,11 @@ export default async function KnowledgePage({
         </Link>
       </div>
 
-      {query && <p className="text-sm text-zinc-500 dark:text-zinc-400">“{query}” 的搜索结果：{results.length} 条</p>}
+      {query && (
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          “{query}” 的搜索结果：{total ?? results.length} 条{(total ?? 0) > 0 && ` · 第 ${page} 页`}
+        </p>
+      )}
       {!query && category && (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
           📁 目录：<span className="font-medium text-zinc-800 dark:text-zinc-100">{category}</span>
@@ -114,7 +123,7 @@ export default async function KnowledgePage({
         ))}
       </ul>
 
-      {!query && (page > 1 || hasMore) && (
+      {(page > 1 || hasMore) && (
         <div className="flex items-center justify-between text-sm">
           <span className="text-zinc-500 dark:text-zinc-400">第 {page} 页</span>
           <div className="flex gap-2">

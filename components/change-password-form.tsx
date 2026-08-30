@@ -23,21 +23,26 @@ export function ChangePasswordForm() {
       setLoading(false);
       return;
     }
-    const res = await fetch("/api/auth/change-password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        currentPassword: fd.get("currentPassword"),
-        newPassword,
-      }),
-    });
-    setLoading(false);
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-      setMessage({ ok: true, text: "密码已修改" });
-      (e.target as HTMLFormElement).reset();
-    } else {
-      setMessage({ ok: false, text: data.error ?? "修改失败" });
+    try {
+      const res = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentPassword: fd.get("currentPassword"),
+          newPassword,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setMessage({ ok: true, text: "密码已修改" });
+        (e.target as HTMLFormElement).reset();
+      } else {
+        setMessage({ ok: false, text: data.error ?? "修改失败" });
+      }
+    } catch {
+      setMessage({ ok: false, text: "网络错误，请稍后重试" });
+    } finally {
+      setLoading(false);
     }
   }
 

@@ -2,11 +2,12 @@ import { NextResponse } from "next/server";
 import { listConceptsForExport } from "@/lib/concepts";
 import { buildOkfZip } from "@/lib/okf";
 import { requireApiUser } from "@/lib/requireUser";
+import { withRoute } from "@/lib/withRoute";
 
 // The exporter uses jszip + Buffer, which need the Node runtime (not Edge).
 export const runtime = "nodejs";
 
-export async function GET() {
+export const GET = withRoute("GET /api/export/okf", async () => {
   const user = await requireApiUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -21,4 +22,4 @@ export async function GET() {
       "Content-Disposition": `attachment; filename="okf-export-${stamp}.zip"`,
     },
   });
-}
+});

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createConcept, listConcepts, type ConceptInput } from "@/lib/concepts";
 import { requireApiUser } from "@/lib/requireUser";
+import { withRoute } from "@/lib/withRoute";
 
 const createSchema = z.object({
   type: z.string().min(1).max(64).default("Note"),
@@ -13,7 +14,7 @@ const createSchema = z.object({
   body: z.string().min(1),
 });
 
-export async function GET(req: Request) {
+export const GET = withRoute("GET /api/concepts", async (req: Request) => {
   const user = await requireApiUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -26,9 +27,9 @@ export async function GET(req: Request) {
   const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.trunc(offsetRaw)) : 0;
   const concepts = await listConcepts({ user, limit, offset });
   return NextResponse.json({ concepts });
-}
+});
 
-export async function POST(req: Request) {
+export const POST = withRoute("POST /api/concepts", async (req: Request) => {
   const user = await requireApiUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -50,4 +51,4 @@ export async function POST(req: Request) {
   };
   const id = await createConcept(input, user);
   return NextResponse.json({ id }, { status: 201 });
-}
+});

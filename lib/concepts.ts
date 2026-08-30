@@ -403,22 +403,27 @@ async function hasPgroonga(): Promise<boolean> {
 // Repeat searches (UI resubmits, MCP agent loops, back-navigation re-renders)
 // hit the same needle within seconds. A small TTL cache turns those into ~0ms.
 // Cleared on any concept mutation — search text only changes through those.
-const searchCache = new Map<string, { at: number; rows: SearchResult[] }>();
-const SEARCH_CACHE_TTL = 60_000;
-const SEARCH_CACHE_MAX = 200;
+const searchCache = new Map<string, { at: number; results: SearchResult[]; total: number }>();
+const SEARCH_CACHE_TTL = Number(process.env.SEARCH_CACHE_TTL_MS ?? 60_000);
+const SEARCH_CACHE_MAX = Number(process.env.SEARCH_CACHE_MAX ?? 200);
 
 function invalidateSearchCache(): void {
   searchCache.clear();
 }
 
-export async function searchConcepts(user: ScopeUser, q: string, limit = 20): Promise<SearchResult[]> {
+export async function searchConcepts(
+  user: ScopeUser,
+  q: string,
+  limit = 20,
+  offset = 0
+): Promise<{ results: SearchResult[]; total: number }> {
   const needle = q.trim().slice(0, 200);
-  if (!needle) return [];
+  if (!needle) return { results: [], total: 0 };
 
-  const cacheKey = `${user.id}:${user.role}|${needle}|${limit}`;
+  const cacheKey = `${user.id}:${user.role}|${needle}|${limit}|${offset}`;
   const cached = searchCache.get(cacheKey);
   if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL) {
-    return cached.rows;
+    return { results: cached.results, total: cached.total };
   }
 
   // Tokenize on whitespace/punctuation. Every token must appear in
@@ -453,6 +458,8 @@ export async function searchConcepts(user: ScopeUser, q: string, limit = 20): Pr
   const qParam = `$${params.length}`;
   params.push(limit);
   const limitParam = `$${params.length}`;
+  params.push(offset);
+  const offsetParam = `$${params.length}`;
   let ownerClause = "c.owner_id = $1";
   if (user.role === "admin") {
     params.push(user.role);
@@ -481,6 +488,8 @@ export async function searchConcepts(user: ScopeUser, q: string, limit = 20): Pr
       c.id, c.type, c.title, c.description, c.status, c.tags,
       c.current_version, c.created_at, c.updated_at,
       c.owner_id, ou.username AS owner_username,
+      -- Total match count for pagination (evaluated over the full window).
+      count(*) over() AS total_count,
       -- Search results only ever render a ~2-line preview (UI) or feed a
       -- truncating client (MCP bodyPreview); shipping full markdown grew the
       -- payload 5-10x. Return a match-anchored window capped at 500 chars —
@@ -510,6 +519,7 @@ export async function searchConcepts(user: ScopeUser, q: string, limit = 20): Pr
     WHERE ${ownerClause} AND (${branches.join(" OR ")})
     ORDER BY score DESC, c.updated_at DESC
     LIMIT ${limitParam}
+    OFFSET ${offsetParam}
   `;
 
   // SET LOCAL keeps the thresholds session-scoped: the pooled connection is
@@ -528,15 +538,22 @@ export async function searchConcepts(user: ScopeUser, q: string, limit = 20): Pr
     // The text is deterministic per (engine flags, token count), so the name
     // cannot collide with different SQL. Connections are replaced on deploy,
     // which naturally invalidates old prepared statements.
-    const stmtName = `search_v1_${hasAscii ? 1 : 0}${hasTrigrams ? 1 : 0}${pgroonga ? 1 : 0}_${tokenCount}`;
-    const { rows } = await client.query<SearchResult>({ name: stmtName, text: sql, values: params as never[] });
+    const stmtName = `search_v2_${hasAscii ? 1 : 0}${hasTrigrams ? 1 : 0}${pgroonga ? 1 : 0}_${tokenCount}`;
+    const { rows } = await client.query<SearchResult & { total_count: string }>({ name: stmtName, text: sql, values: params as never[] });
     await client.query("COMMIT");
+    // count(*) over() rides on the rows; an offset past the end has no rows
+    // and therefore reports total 0 — the UI simply shows an empty page.
+    const total = rows.length > 0 ? Number(rows[0].total_count) : 0;
+    const results: SearchResult[] = rows.map(({ total_count, ...r }) => {
+      void total_count;
+      return r;
+    });
     if (searchCache.size >= SEARCH_CACHE_MAX) {
       const oldest = searchCache.keys().next().value;
       if (oldest !== undefined) searchCache.delete(oldest);
     }
-    searchCache.set(cacheKey, { at: Date.now(), rows });
-    return rows;
+    searchCache.set(cacheKey, { at: Date.now(), results, total });
+    return { results, total };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
