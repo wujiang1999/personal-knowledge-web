@@ -64,10 +64,11 @@ export async function rerankWithSemantic<T extends { id: string; score: number }
   limit: number
 ): Promise<T[]> {
   const [queryVector] = await llmEmbed([needle.slice(0, 4000)]);
-  const semIds = await semanticCandidates(user, queryVector, Math.max(limit * 2, 20));
+  const semCands = await semanticCandidates(user, queryVector, Math.max(limit * 2, 20));
+  const simById = new Map(semCands.map((c) => [c.id, c.similarity]));
   const fused = rrfMerge<{ id: string }>([
     lexical,
-    semIds.map((id) => ({ id })),
+    semCands.map((c) => ({ id: c.id })),
   ]);
 
   const lexicalById = new Map(lexical.map((r) => [r.id, r]));
@@ -76,7 +77,7 @@ export async function rerankWithSemantic<T extends { id: string; score: number }
     .map((f) => f.item.id);
   const semRows = semOnlyIds.length ? await conceptRowsForIds(user, semOnlyIds) : [];
   const semById = new Map(
-    semRows.map((r) => [r.id, { ...r, score: 0 } as unknown as T])
+    semRows.map((r) => [r.id, { ...r, score: 0, similarity: simById.get(r.id) } as unknown as T])
   );
 
   const out: T[] = [];
@@ -84,19 +85,24 @@ export async function rerankWithSemantic<T extends { id: string; score: number }
     if (out.length >= limit) break;
     const row = lexicalById.get(item.id) ?? semById.get(item.id);
     if (!row) continue; // scope-filtered out (e.g. other owner's embedding)
-    out.push(lexicalById.has(item.id) ? row : ({ ...row, score: Math.round(rrf * 100) } as T));
+    const similarity = simById.get(item.id);
+    const full = lexicalById.has(item.id) ? { ...row, similarity } : { ...row, score: Math.round(rrf * 100), similarity };
+    out.push(full as T);
   }
   return out;
 }
 
-/** Top concept ids by cosine similarity to the query vector, owner-scoped. */
+/** Top concepts by cosine similarity to the query vector, owner-scoped.
+ * Similarity rides along (1 − cosine distance) because downstream callers —
+ * notably the MCP write-path judge — need a scale-independent relatedness
+ * signal; the fused display score is not comparable across result kinds. */
 export async function semanticCandidates(
   user: ScopeUser,
   queryVector: number[],
   limit: number
-): Promise<string[]> {
-  const { rows } = await query<{ id: string }>(
-    `SELECT ce.concept_id AS id
+): Promise<{ id: string; similarity: number }[]> {
+  const { rows } = await query<{ id: string; similarity: number }>(
+    `SELECT ce.concept_id AS id, 1 - (ce.embedding <=> $1::vector) AS similarity
      FROM concept_embeddings ce
      JOIN concepts c ON c.id = ce.concept_id
      ${user.role === "admin" ? "" : "WHERE c.owner_id = $2"}
@@ -104,7 +110,7 @@ export async function semanticCandidates(
      LIMIT ${limit}`,
     user.role === "admin" ? [toVectorLiteral(queryVector)] : [toVectorLiteral(queryVector), user.id]
   );
-  return rows.map((r) => r.id);
+  return rows;
 }
 
 /** Fetch SearchResult-shaped rows for semantic-only hits (no lexical match

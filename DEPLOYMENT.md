@@ -81,6 +81,13 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
   （旧 `as unknown as T` 强转掩盖了两处）。线上验证：「怎么把应用搬到云服务器上」→ 命中 ECS 部署
   全流程条目；词面查询的 RRF 融合不退化。凭证：embedding key 走 `LLM_EMBEDDING_*`（与聊天
   DeepSeek 分离），经文件追加写入不回显。
+- 2026-09-01（凌晨，判别降级语义化微调，42c409b@MCP 联动）：搜索结果携带 `similarity` 字段
+  （余弦相似度，`1 - 距离`，仅语义搜索运行时存在）。动机：MCP 写路径判别（personal-knowledge-web-mcp）
+  的规则降级原先只看词法融合分（阈值 60，按词法分标定）；语义搜索上线后纯语义候选行的显示分是
+  RRF 换算值（约 2–5 分），永远够不到 60——LLM 判别不可用时，换措辞的重复会漏过降级防线。
+  服务端 `semanticCandidates` 返回 `{id, similarity}`，`rerankWithSemantic` 与空窗口路径都把
+  相似度附到结果行；MCP v0.3.2 同步：降级规则改为「相似度 ≥0.75 优先，其次词法分 ≥60」，
+  旧服务器（无 embeddings）字段缺省时自动退回纯词法判据，新增 3 条测试（46/46）。
 - 2026-08-30（应用侧 LLM 三件套，731de55）：**① ingest 流水线产品化**——`npm run ingest -- <file.md>
   [--write] [--category 前缀] [--max N]`：Markdown 按标题/段落分块（`lib/ingest.ts`，≤2800 字符/块、
   小碎片前向合并）→ LLM 原子化提取（OpenAI 兼容，默认 dry-run，`--write` 才落库）→ 标题检索查重

@@ -398,10 +398,14 @@ export async function getConceptDetail(id: string, user: ScopeUser): Promise<Con
   );
   return { ...concept, versions: versions.rows };
 }
-
 export interface SearchResult extends Concept {
   body_markdown: string;
   score: number;
+  /** Cosine similarity (1 − distance) to the query embedding, 0–1. Only
+   * present when semantic search ran; the MCP write-path judge uses it as a
+   * scale-independent relatedness signal since fused scores aren't comparable
+   * across lexical and semantic-only rows. */
+  similarity?: number;
 }
 
 /** Cached probe: is the pgroonga extension installed in this database? */
@@ -595,12 +599,19 @@ export async function searchConcepts(
         results = await rerankWithSemantic(user, needle, lexicalResults, limit);
       } else {
         const [queryVector] = await llmEmbed([needle.slice(0, 4000)]);
-        const semIds = await semanticCandidates(user, queryVector, limit);
-        const semRows = semIds.length ? await conceptRowsForIds(user, semIds) : [];
-        // Nearest-first ordering: cosine distance ranks the semantic list.
-        const order = new Map(semIds.map((id, i) => [id, i]));
+        const semCands = await semanticCandidates(user, queryVector, limit);
+        const ids = semCands.map((c) => c.id);
+        const semRows = ids.length ? await conceptRowsForIds(user, ids) : [];
+        // Nearest-first ordering: cosine distance ranks the semantic list;
+        // the raw similarity also rides on the row for downstream judges.
+        const order = new Map(ids.map((id, i) => [id, i]));
+        const simById = new Map(semCands.map((c) => [c.id, c.similarity]));
         semRows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
-        results = semRows.map((r, i) => ({ ...r, score: Math.max(1, 100 - i * 5) }));
+        results = semRows.map((r, i) => ({
+          ...r,
+          score: Math.max(1, 100 - i * 5),
+          similarity: simById.get(r.id),
+        }));
         // count(*) over() reported 0 for the empty window; the semantic list
         // is the honest match count for this (page-1-only) path.
         totalOut = results.length;
