@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { getPool, query } from "./db";
 import { deleteAttachmentFile } from "./attachments";
 import type { ScopeUser } from "./requireUser";
-import { hasSemanticSearch, rerankWithSemantic } from "./semantic";
+import { conceptRowsForIds, hasSemanticSearch, rerankWithSemantic, semanticCandidates } from "./semantic";
+import { llmEmbed } from "./llm";
 
 /** Thrown when a concept lookup by id finds no row (typed 404, not string-match). */
 export class NotFoundError extends Error {}
@@ -579,18 +580,34 @@ export async function searchConcepts(
     client.release();
   }
 
-  // Semantic recall expansion (pgvector, entirely optional): rerank the
-  // lexical window together with nearest-embedding neighbors via RRF. Only
-  // on the first page so deeper pages keep predictable paging. Runs outside
-  // the pooled connection (the embedding HTTP call must not hold one), and
-  // any failure degrades to lexical-only.
+  // Semantic recall expansion (pgvector, entirely optional), first page only
+  // so deeper pages keep predictable paging. Runs outside the pooled
+  // connection (the embedding HTTP call must not hold one); any failure
+  // degrades to lexical-only. Two modes: with a lexical window, fuse both
+  // lists via RRF; when the window is empty — the exact case lexical search
+  // cannot cover (paraphrased queries, no keyword overlap) — answer from the
+  // nearest embeddings alone.
   let results = lexicalResults;
-  if (offset === 0 && results.length > 0 && (await hasSemanticSearch())) {
+  let totalOut = total;
+  if (offset === 0 && (await hasSemanticSearch())) {
     try {
-      results = await rerankWithSemantic(user, needle, lexicalResults, limit);
+      if (lexicalResults.length > 0) {
+        results = await rerankWithSemantic(user, needle, lexicalResults, limit);
+      } else {
+        const [queryVector] = await llmEmbed([needle.slice(0, 4000)]);
+        const semIds = await semanticCandidates(user, queryVector, limit);
+        const semRows = semIds.length ? await conceptRowsForIds(user, semIds) : [];
+        // Nearest-first ordering: cosine distance ranks the semantic list.
+        const order = new Map(semIds.map((id, i) => [id, i]));
+        semRows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+        results = semRows.map((r, i) => ({ ...r, score: Math.max(1, 100 - i * 5) }));
+        // count(*) over() reported 0 for the empty window; the semantic list
+        // is the honest match count for this (page-1-only) path.
+        totalOut = results.length;
+      }
     } catch (err) {
       console.error(
-        "[semantic] rerank failed, lexical only:",
+        "[semantic] recall failed, lexical only:",
         err instanceof Error ? err.message : err
       );
     }
@@ -600,8 +617,8 @@ export async function searchConcepts(
     const oldest = searchCache.keys().next().value;
     if (oldest !== undefined) searchCache.delete(oldest);
   }
-  searchCache.set(cacheKey, { at: Date.now(), results, total });
-  return { results, total };
+  searchCache.set(cacheKey, { at: Date.now(), results, total: totalOut });
+  return { results, total: totalOut };
 }
 
 export async function createConcept(input: ConceptInput, user: { id: string; username: string; role: "user" | "admin" }): Promise<string> {

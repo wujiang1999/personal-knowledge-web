@@ -118,13 +118,14 @@ export async function conceptRowsForIds(
     type: string;
     title: string;
     description: string | null;
+    category: string | null;
     status: string;
     tags: string[];
     current_version: number;
     created_at: string;
     updated_at: string;
-    owner_id: string | null;
-    owner_username: string | null;
+    owner_id: string | undefined;
+    owner_username: string | undefined;
     body_markdown: string;
   }[]
 > {
@@ -134,6 +135,7 @@ export async function conceptRowsForIds(
     type: string;
     title: string;
     description: string | null;
+    category: string | null;
     status: string;
     tags: string[];
     current_version: number;
@@ -143,7 +145,7 @@ export async function conceptRowsForIds(
     owner_username: string | null;
     body_markdown: string;
   }>(
-    `SELECT c.id, c.type, c.title, c.description, c.status, c.tags,
+    `SELECT c.id, c.type, c.title, c.description, c.category, c.status, c.tags,
             c.current_version, c.created_at, c.updated_at,
             c.owner_id, ou.username AS owner_username,
             left(v.body_markdown, 500) AS body_markdown
@@ -154,7 +156,13 @@ export async function conceptRowsForIds(
        ${user.role === "admin" ? "" : "AND c.owner_id = $2"}`,
     user.role === "admin" ? [ids] : [ids, user.id]
   );
-  return rows;
+  // SearchResult models a missing owner as undefined (LEFT JOIN types as
+  // nullable); coerce once so callers can assign directly.
+  return rows.map((r) => ({
+    ...r,
+    owner_id: r.owner_id ?? undefined,
+    owner_username: r.owner_username ?? undefined,
+  }));
 }
 
 /** Ensure the (untyped) embeddings table exists — used by the backfill script
