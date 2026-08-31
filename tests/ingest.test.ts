@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { splitMarkdown, validateCandidates } from "../lib/ingest";
+import { ingestUserPrompt, splitMarkdown, splitMarkdownWithPaths, validateCandidates } from "../lib/ingest";
 
 describe("splitMarkdown", () => {
   const filler = (s: string, n: number) => s.repeat(n);
@@ -44,6 +44,48 @@ describe("splitMarkdown", () => {
   it("does not treat #hashtag-like lines without space as headings", () => {
     const chunks = splitMarkdown("body #tag more body");
     expect(chunks).toHaveLength(1);
+  });
+});
+
+describe("splitMarkdownWithPaths", () => {
+  const filler = (s: string, n: number) => s.repeat(n);
+
+  it("tracks the heading breadcrumb per chunk", () => {
+    // 每节 ≥120 字,避免触发小碎片前向合并
+    const md = [
+      filler("引言内容。", 30),
+      "# 第一章",
+      filler("第一章的正文。", 30),
+      "## 第二节",
+      filler("第二节的正文。", 30),
+    ].join("\n\n");
+    const { chunks, paths } = splitMarkdownWithPaths(md);
+    expect(chunks.length).toBe(3);
+    expect(paths).toEqual(["", "第一章", "第一章 > 第二节"]);
+  });
+
+  it("pops the stack when a shallower heading reappears", () => {
+    const md = `# A\n\n${filler("A 节正文。", 30)}\n\n## A1\n\n${filler("A1 节正文。", 30)}\n\n# B\n\n${filler("B 节正文。", 30)}`;
+    const { chunks, paths } = splitMarkdownWithPaths(md);
+    expect(chunks.length).toBe(3);
+    expect(paths).toEqual(["A", "A > A1", "B"]);
+  });
+
+  it("keeps chunk text identical to splitMarkdown", () => {
+    const md = `# A\n\n${filler("a。", 30)}\n\n## A1\n\n${filler("a1。", 30)}`;
+    expect(splitMarkdownWithPaths(md).chunks).toEqual(splitMarkdown(md));
+  });
+});
+
+describe("ingestUserPrompt", () => {
+  it("prepends the location context when given", () => {
+    const p = ingestUserPrompt("正文", 5, "第一章 > 第二节");
+    expect(p.startsWith("位置：第一章 > 第二节")).toBe(true);
+  });
+
+  it("omits the context line for empty paths", () => {
+    expect(ingestUserPrompt("正文", 5, "")).toBe("材料如下（最多拆出 5 条）：\n\n正文");
+    expect(ingestUserPrompt("正文", 5)).toBe("材料如下（最多拆出 5 条）：\n\n正文");
   });
 });
 

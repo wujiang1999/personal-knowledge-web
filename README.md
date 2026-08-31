@@ -23,6 +23,9 @@
 - 全文搜索（标题 / 正文 / 描述，中文与英文、代码关键词均可命中）
 - 原始来源保留（每次录入的原始输入留存，用于可追溯与去重）
 - OKF v0.2 Bundle 导出（`.okf/index.md`、`log.md`、按 type 分目录的概念 Markdown，ZIP 下载）
+- 双向引用：正文中 `[[条目标题]]` 渲染为可跳转链接，详情页附「被引用」反向链接面板
+- 写入时精确查重：创建内容与已有条目正文完全相同时返回 409 并指向原条目
+- 只读整理报告：`npm run curate` 列出疑似重复 / 失效链接 / 缺描述 / 长期未更新
 - 路由级 + 接口级双重鉴权（Middleware + Server Component / Route Handler）
 
 ## 目录结构
@@ -30,12 +33,13 @@
 ```
 app/                  # 页面（登录、概览、知识、来源、设置）与 API 路由
 components/           # 客户端表单与登录组件
-lib/                  # 认证、数据库访问、概念 CRUD、搜索、OKF 导出、附件
+lib/                  # 认证、数据库访问、概念 CRUD、搜索、OKF 导出、附件、[[链接]]
 db/schema.sql         # 数据库 schema（含 pg_trgm、tsvector 触发器、索引）
 scripts/migrate.ts    # 应用 schema（幂等迁移 runner）
 scripts/seed.ts       # 创建默认管理员（幂等，不覆盖已修改的密码）
-middleware.ts         # 登录保护与重定向
-tests/                # Vitest 单元测试（限流 / 搜索转义 / OKF / 附件 MIME 校验）
+scripts/curate.ts     # 只读知识库整理报告（重复/失效链接/缺描述/陈旧）
+proxy.ts              # 登录保护与重定向
+tests/                # Vitest 单元测试（限流 / 搜索转义 / OKF / 附件 MIME / [[链接]]）
 .github/workflows/ci.yml  # CI：typecheck + lint + test + build
 ```
 
@@ -182,14 +186,13 @@ sudo systemctl list-timers | grep backup                      # 查看下次备�
 │   └── <slug>-<id8>.md   # 每个概念一个文件
 └── deprecated/...        # status=deprecated 的概念
 ```
-
 每个概念文件带 YAML frontmatter，`type` 必填，并含 `status`、`generated`（`at` 取自当前版本创建时间，不受元数据-only 编辑影响）、自定义 `kb` 字段（id/version/language/content_hash/sensitivity）。
 
 ## 后续阶段（方案文档 P1–P5）
 
-- pgvector 向量检索 + 混合检索（RRF）
-- 注入流程（Markdown/PDF/DOCX/URL）、LLM 知识原子化
-- 近似去重、冲突审核、Claim 抽取
+- pgvector 向量检索 + 混合检索（RRF）——代码就绪，待配置 embedding 端点（见 DEPLOYMENT.md）
+- ~~注入流程（Markdown/PDF/DOCX/URL）、LLM 知识原子化~~ Markdown 已产品化：`npm run ingest`（含 §3.3.5 上下文锚定分块）
+- ~~近似去重、冲突审核~~ 部分落地：写入时精确查重（409）+ `npm run curate` 整理报告；冲突审核/Claim 抽取待做
 - OKF 同步到 Private Git 仓库
 
 ## 安全说明

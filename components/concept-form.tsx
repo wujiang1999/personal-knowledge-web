@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 export interface ConceptFormInitial {
@@ -30,11 +31,13 @@ export function ConceptForm({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+  const [duplicate, setDuplicate] = useState<{ id: string; title: string } | null>(null);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setLoading(true);
     setError("");
+    setDuplicate(null);
     const fd = new FormData(e.currentTarget);
     const tags = String(fd.get("tags") || "")
       .split(/[,，]/)
@@ -63,7 +66,12 @@ export function ConceptForm({
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(data.error ?? "保存失败");
+        if (res.status === 409 && data.existingId) {
+          setDuplicate({ id: data.existingId, title: data.existingTitle ?? "已有条目" });
+          setError(data.error ?? "内容与已有条目完全相同");
+        } else {
+          setError(data.error ?? "保存失败");
+        }
         return;
       }
 
@@ -157,9 +165,21 @@ export function ConceptForm({
           className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-sm outline-none focus:border-zinc-500 focus:ring-1 focus:ring-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500"
         />
       </div>
+        <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+          支持 <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">[[条目标题]]</code>{" "}
+          链接到其他条目（保存后可双向跳转）。
+        </p>
 
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
       {notice && <p className="text-sm text-blue-600 dark:text-blue-400">{notice}</p>}
+      {duplicate && (
+        <p className="text-sm text-amber-600 dark:text-amber-400">
+          查看重复条目：{" "}
+          <Link href={`/knowledge/${duplicate.id}`} className="font-medium underline">
+            {duplicate.title}
+          </Link>
+        </p>
+      )}
 
       <div className="flex gap-2">
         <button

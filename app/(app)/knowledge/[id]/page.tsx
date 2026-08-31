@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/requireUser";
-import { getConceptDetail } from "@/lib/concepts";
+import { findBacklinks, getConceptDetail, resolveLinkTargets } from "@/lib/concepts";
+import { parseWikiLinks } from "@/lib/links";
+import { ConceptBody } from "@/components/concept-body";
 import { ConceptForm } from "@/components/concept-form";
 import { DeleteConceptButton } from "@/components/delete-concept-button";
 import { AttachmentsPanel } from "@/components/attachments-panel";
@@ -17,6 +19,13 @@ export default async function ConceptDetailPage({
   if (!concept) notFound();
 
   const current = concept.versions.find((v) => v.version_number === concept.current_version);
+  const bodyText = current?.body_markdown ?? "";
+  // Bidirectional link network (§3.3.2): resolve outgoing [[标题]] targets and
+  // look up incoming backlinks in parallel.
+  const [titleToId, backlinks] = await Promise.all([
+    resolveLinkTargets(user, parseWikiLinks(bodyText).map((r) => r.title)),
+    findBacklinks(user, concept.id, concept.title),
+  ]);
 
   return (
     <div className="space-y-8">
@@ -73,10 +82,26 @@ export default async function ConceptDetailPage({
 
       <section>
         <h2 className="mb-2 font-medium">当前正文（v{concept.current_version}）</h2>
-        <pre className="whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-white p-4 text-sm leading-relaxed dark:border-zinc-800 dark:bg-zinc-900">
-          {current?.body_markdown ?? ""}
-        </pre>
+        <ConceptBody body={bodyText} titleToId={titleToId} />
       </section>
+
+      {backlinks.length > 0 && (
+        <section>
+          <h2 className="mb-2 font-medium">被引用（{backlinks.length}）</h2>
+          <ul className="divide-y rounded-lg border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
+            {backlinks.map((b) => (
+              <li key={b.id} className="flex items-center justify-between px-4 py-2 text-sm">
+                <Link href={`/knowledge/${b.id}`} className="hover:underline">
+                  {b.title}
+                </Link>
+                <span className="text-xs text-zinc-400 dark:text-zinc-500">
+                  {new Date(b.updated_at).toLocaleDateString("zh-CN")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <AttachmentsPanel conceptId={concept.id} />
 

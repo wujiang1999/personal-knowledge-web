@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { AttachmentTooLargeError } from "./attachments";
-import { NotFoundError } from "./concepts";
+import { DuplicateBodyError, NotFoundError } from "./concepts";
 
 type Handler<A extends unknown[]> = (...args: A) => Promise<Response>;
 
@@ -20,6 +20,12 @@ export function withRoute<A extends unknown[]>(name: string, handler: Handler<A>
       }
       if (err instanceof AttachmentTooLargeError) {
         return NextResponse.json({ error: err.message || "attachment too large" }, { status: 413 });
+      }
+      if (err instanceof DuplicateBodyError) {
+        return NextResponse.json(
+          { error: err.message, existingId: err.existingId, existingTitle: err.existingTitle },
+          { status: 409 }
+        );
       }
       console.error(`[api] ${name} failed:`, err);
       return NextResponse.json({ error: "internal error" }, { status: 500 });

@@ -5,7 +5,7 @@ import { llmChatJsonWith } from "../lib/llm";
 import {
   INGEST_SYSTEM_PROMPT,
   ingestUserPrompt,
-  splitMarkdown,
+  splitMarkdownWithPaths,
   validateCandidates,
 } from "../lib/ingest";
 import { createConcept, searchConcepts } from "../lib/concepts";
@@ -42,7 +42,7 @@ async function main() {
 
   const cfg: LlmConfig = getLlmChatConfig() ?? usageNever();
   const md = readFileSync(file, "utf8");
-  const chunks = splitMarkdown(md);
+  const { chunks, paths } = splitMarkdownWithPaths(md);
   console.error(
     `[ingest] ${file}: ${md.length} 字符 → ${chunks.length} 块;模式=${write ? "写入" : "dry-run(加 --write 才落库)"};模型=${cfg.model}`
   );
@@ -65,7 +65,7 @@ async function main() {
     try {
       const out = await llmChatJsonWith<unknown>(cfg, [
         { role: "system", content: INGEST_SYSTEM_PROMPT },
-        { role: "user", content: ingestUserPrompt(chunk, max) },
+        { role: "user", content: ingestUserPrompt(chunk, max, paths[i]) },
       ]);
       if (Array.isArray(out)) raw.push(...out);
       process.stderr.write(`[ingest] 提取 ${i + 1}/${chunks.length} 完成\n`);

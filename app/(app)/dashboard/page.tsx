@@ -83,6 +83,9 @@ export default async function DashboardPage() {
                 <span className="font-medium">{c.title}</span>
                 {c.category && <span className="ml-2 text-xs text-zinc-400 dark:text-zinc-500">{c.category}</span>}
                 <span className="ml-2 text-xs text-zinc-400 dark:text-zinc-500">{c.type}</span>
+                {c.status === "deprecated" && (
+                  <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-600 dark:bg-red-900/40 dark:text-red-300">已废弃</span>
+                )}
               </Link>
               <span className="text-xs text-zinc-400 dark:text-zinc-500">{new Date(c.updated_at).toLocaleDateString("zh-CN")}</span>
             </li>

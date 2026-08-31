@@ -17,6 +17,7 @@
     "db:create-api-key": "tsx scripts/create-api-key.ts",
     "attachments:audit": "tsx scripts/audit-attachments.ts",
     "ingest": "tsx scripts/ingest.ts",
+    "curate": "tsx scripts/curate.ts",
     "db:embed-backfill": "tsx scripts/embed-backfill.ts",
     "smoke:prod": "node scripts/smoke-production.mjs"
   },

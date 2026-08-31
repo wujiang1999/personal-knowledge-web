@@ -7,6 +7,21 @@ import { hasSemanticSearch, rerankWithSemantic } from "./semantic";
 /** Thrown when a concept lookup by id finds no row (typed 404, not string-match). */
 export class NotFoundError extends Error {}
 
+/** Thrown when a create would store a byte-identical duplicate of an existing
+ * concept (same current-version body hash inside the caller's scope). Carries
+ * the existing row so the API can answer 409 and point at it. Exact-content
+ * dedup is the book's §3.3.3.2 "去重、合并" principle applied at write time;
+ * near-duplicates stay a human/search judgment. */
+export class DuplicateBodyError extends Error {
+  constructor(
+    public readonly existingId: string,
+    public readonly existingTitle: string
+  ) {
+    super(`内容与已有条目「${existingTitle}」完全相同，请直接编辑该条目`);
+    this.name = "DuplicateBodyError";
+  }
+}
+
 export interface Concept {
   id: string;
   type: string;
@@ -510,6 +525,8 @@ export async function searchConcepts(
         + (CASE WHEN v.body_markdown ILIKE ${likeParam} THEN 15 ELSE 0 END)
         + (CASE WHEN c.description ILIKE ${likeParam} THEN 8 ELSE 0 END)
         + (${coverageTerms.join(" + ")}) * 20.0 / ${tokenCount}
+        -- 失效内容降权(§3.3.3.2):废弃条目仍可被搜到但不与有效条目竞争前排。
+        + (CASE WHEN c.status = 'deprecated' THEN -150 ELSE 0 END)
         ${hasTrigrams ? `+ (similarity(c.title, ${qParam}) * 50)
         + (word_similarity(${qParam}, v.body_markdown) * 20)
         + (similarity(COALESCE(c.description, ''), ${qParam}) * 12)` : ""}
@@ -587,7 +604,7 @@ export async function searchConcepts(
   return { results, total };
 }
 
-export async function createConcept(input: ConceptInput, user: { id: string; username: string }): Promise<string> {
+export async function createConcept(input: ConceptInput, user: { id: string; username: string; role: "user" | "admin" }): Promise<string> {
   const body = input.body;
   const contentHash = sha256Hex(body);
   const type = input.type.trim() || "Note";
@@ -600,6 +617,17 @@ export async function createConcept(input: ConceptInput, user: { id: string; use
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    // Exact-body dedup within the caller's scope: a concept whose current
+    // version already hashes identically wins; the create fails with 409.
+    const dupBody = await client.query(
+      `SELECT c.id, c.title FROM concepts c
+       JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
+       WHERE v.content_hash = $1 ${user.role === "admin" ? "" : "AND c.owner_id = $2"} LIMIT 1`,
+      user.role === "admin" ? [contentHash] : [contentHash, user.id]
+    );
+    if (dupBody.rows.length > 0) {
+      throw new DuplicateBodyError(dupBody.rows[0].id as string, dupBody.rows[0].title as string);
+    }
     const inserted = await client.query(
       "INSERT INTO concepts (owner_id, type, title, description, category, tags, status) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
       [user.id, type, title, description, category, tags, status]
@@ -795,5 +823,55 @@ export async function listConceptsForExport(user: ScopeUser): Promise<ExportConc
     ${user.role === "admin" ? "" : "WHERE c.owner_id = $1"}
     ORDER BY c.updated_at DESC
   `, user.role === "admin" ? [] : [user.id]);
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Wiki links ([[标题]]): the book (§3.3.2) asks for a Wikipedia-style
+// bidirectional reference network instead of isolated note islands. Parsing
+// is pure and lives in lib/links; these are the scoped DB lookups.
+// ---------------------------------------------------------------------------
+
+/** Resolve wiki-link titles to concept ids visible to `user`. Matching is
+ * case-insensitive; unknown titles simply stay unresolved (dimmed in UI). */
+export async function resolveLinkTargets(
+  user: ScopeUser,
+  titles: string[]
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const uniq = [...new Set(titles.map((t) => t.trim()).filter(Boolean))].slice(0, 100);
+  if (uniq.length === 0) return map;
+  const lowered = uniq.map((t) => t.toLowerCase());
+  const { rows } = await query<{ id: string; title: string }>(
+    `SELECT c.id, c.title FROM concepts c
+     WHERE lower(c.title) = ANY($1::text[]) ${user.role === "admin" ? "" : "AND c.owner_id = $2"}`,
+    user.role === "admin" ? [lowered] : [lowered, user.id]
+  );
+  for (const r of rows) {
+    const key = r.title.toLowerCase();
+    if (!map.has(key)) map.set(key, r.id);
+  }
+  return map;
+}
+
+/** Concepts whose current body links to `targetTitle` via `[[targetTitle]]`,
+ * newest first — the backlink panel of a concept page. */
+export async function findBacklinks(
+  user: ScopeUser,
+  targetId: string,
+  targetTitle: string,
+  limit = 50
+): Promise<{ id: string; title: string; updated_at: string }[]> {
+  const pattern = `%${escapeLike(`[[${targetTitle}]]`)}%`;
+  const { rows } = await query<{ id: string; title: string; updated_at: string }>(
+    `SELECT c.id, c.title, c.updated_at
+     FROM concepts c
+     JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
+     WHERE c.id <> $1 AND v.body_markdown ILIKE $2 ESCAPE '\\'
+       ${user.role === "admin" ? "" : "AND c.owner_id = $3"}
+     ORDER BY c.updated_at DESC
+     LIMIT ${Math.max(1, Math.min(200, limit))}`,
+    user.role === "admin" ? [targetId, pattern] : [targetId, pattern, user.id]
+  );
   return rows;
 }

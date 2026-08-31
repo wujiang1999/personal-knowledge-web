@@ -17,61 +17,94 @@ const MAX_CHUNK_CHARS = 2800;
 /** Sections shorter than this carry too little signal to atomize alone. */
 const MIN_CHUNK_CHARS = 120;
 
-/** Split Markdown into LLM-sized chunks: first by headings (any level), then
- * long sections by paragraph windows. Tiny trailing fragments merge into the
- * previous chunk so context is not lost between them. */
-export function splitMarkdown(md: string): string[] {
+/** Split Markdown into LLM-sized chunks, each annotated with the heading
+ * breadcrumb ("location path") of the section it came from — index-aligned
+ * `chunks[i]` / `paths[i]`. The book (§3.3.5 Contextual Retrieval) shows a
+ * chunk severed from its heading hierarchy becomes ambiguous ("该公司" =
+ * which company?); the path is injected into the extraction prompt so
+ * atomized entries stay anchored to their document context.
+ *
+ * Chunking semantics (unchanged contract): sections break at any `#`–`####`
+ * heading; oversized sections split into paragraph windows; tiny fragments
+ * merge forward. A merged chunk that spans sections carries all of their
+ * paths joined by ` | `. Content before the first heading has path "". */
+export function splitMarkdownWithPaths(md: string): { chunks: string[]; paths: string[] } {
   const lines = md.replace(/\r\n/g, "\n").split("\n");
-  const sections: string[] = [];
+  const sections: { text: string; path: string }[] = [];
   let current: string[] = [];
+  const stack: { level: number; text: string }[] = [];
+  const breadcrumb = () => stack.map((h) => h.text).join(" > ");
+  const applyHeading = (line: string) => {
+    const m = /^(#{1,4})\s+(\S.*)$/.exec(line)!;
+    const level = m[1].length;
+    while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
+    stack.push({ level, text: m[2].trim() });
+  };
   for (const line of lines) {
-    if (/^#{1,4}\s+\S/.test(line) && current.length) {
-      // A heading starts a new section; whatever came before (including the
-      // content ahead of the first heading) is flushed as its own section.
-      sections.push(current.join("\n").trim());
+    const isHeading = /^#{1,4}\s+\S/.test(line);
+    if (isHeading && current.length) {
+      // Flush what precedes the heading under the breadcrumb in force while
+      // that content was written; the heading then opens a new section.
+      sections.push({ text: current.join("\n").trim(), path: breadcrumb() });
+      applyHeading(line);
       current = [line];
     } else {
+      if (isHeading) applyHeading(line);
       current.push(line);
     }
   }
-  if (current.length) sections.push(current.join("\n").trim());
-  const pieces = sections.filter((s) => s.length > 0);
+  if (current.length) sections.push({ text: current.join("\n").trim(), path: breadcrumb() });
+  const pieces = sections.filter((s) => s.text.length > 0);
 
-  const chunks: string[] = [];
+  const raw: { text: string; path: string }[] = [];
   for (const piece of pieces) {
-    if (piece.length <= MAX_CHUNK_CHARS) {
-      chunks.push(piece);
+    if (piece.text.length <= MAX_CHUNK_CHARS) {
+      raw.push(piece);
       continue;
     }
     // Paragraph-window split for oversized sections.
     let window = "";
-    for (const para of piece.split(/\n{2,}/)) {
+    for (const para of piece.text.split(/\n{2,}/)) {
       const candidate = window ? `${window}\n\n${para}` : para;
       if (candidate.length > MAX_CHUNK_CHARS && window) {
-        chunks.push(window);
+        raw.push({ text: window, path: piece.path });
         window = para.slice(0, MAX_CHUNK_CHARS);
       } else if (candidate.length > MAX_CHUNK_CHARS) {
-        chunks.push(candidate);
+        raw.push({ text: candidate, path: piece.path });
         window = "";
       } else {
         window = candidate;
       }
     }
-    if (window.trim()) chunks.push(window);
+    if (window.trim()) raw.push({ text: window, path: piece.path });
   }
 
-  // Merge tiny fragments forward so the LLM sees enough context.
-  const merged: string[] = [];
-  for (const chunk of chunks) {
+  // Merge tiny fragments forward so the LLM sees enough context; paths of the
+  // merged pieces accumulate (deduped, in order).
+  const merged: { text: string; paths: string[] }[] = [];
+  for (const item of raw) {
     const prev = merged[merged.length - 1];
-    if (prev !== undefined && prev.length + chunk.length <= MAX_CHUNK_CHARS &&
-        (chunk.length < MIN_CHUNK_CHARS || prev.length < MIN_CHUNK_CHARS)) {
-      merged[merged.length - 1] = `${prev}\n\n${chunk}`;
+    if (
+      prev !== undefined &&
+      prev.text.length + item.text.length <= MAX_CHUNK_CHARS &&
+      (item.text.length < MIN_CHUNK_CHARS || prev.text.length < MIN_CHUNK_CHARS)
+    ) {
+      prev.text = `${prev.text}\n\n${item.text}`;
+      if (!prev.paths.includes(item.path)) prev.paths.push(item.path);
     } else {
-      merged.push(chunk);
+      merged.push({ text: item.text, paths: [item.path] });
     }
   }
-  return merged.filter((c) => c.trim().length > 0);
+  const out = merged.filter((c) => c.text.trim().length > 0);
+  return {
+    chunks: out.map((c) => c.text),
+    paths: out.map((c) => c.paths.filter(Boolean).join(" | ")),
+  };
+}
+
+/** Backward-compatible chunk-only view of splitMarkdownWithPaths. */
+export function splitMarkdown(md: string): string[] {
+  return splitMarkdownWithPaths(md).chunks;
 }
 
 function clampString(v: unknown, max: number): string {
@@ -122,13 +155,17 @@ export const INGEST_SYSTEM_PROMPT = `你是个人知识库的编辑。把输入�
 - 一条 = 一个独立、可单独检索的知识点（一个结论、一个机制、一个步骤、一个定义）。
 - body 用 Markdown 保留原文的关键细节、数字、代码与因果关系，300-1500 字；不要改写事实、不要发挥。
 - 宁大勿碎：同一机制的不同侧面可留在同一条；纯粹寒暄、目录、重复内容不要输出。
+- 若材料带有「位置」上下文，用它消歧：条目标题须自含主体（哪家公司/哪份文件/哪个系统），
+  正文开头一句点明来源章节，代词（"该公司""上文"）一律还原为具体对象。
 - description 用一句话(≤120 字)概括该条目的核心结论；category 用 1-2 级中文目录；tags 3-6 个短标签。
 - type 从 Note/Definition/Procedure/Decision/Entity/Reference/Technical Note 中选择。
 只输出 JSON 数组，格式：
 [{"title":"...","description":"...","type":"Note","category":"...","tags":["..."],"body":"..."}]
 没有可提取的内容时输出 []。`;
 
-/** Chat prompt for one chunk. Returns the user-message text. */
-export function ingestUserPrompt(chunk: string, max: number): string {
-  return `材料如下（最多拆出 ${max} 条）：\n\n${chunk}`;
+/** Chat prompt for one chunk. `contextPath` (heading breadcrumb) anchors the
+ * chunk in its original location — see splitMarkdownWithPaths. */
+export function ingestUserPrompt(chunk: string, max: number, contextPath?: string): string {
+  const ctx = contextPath?.trim() ? `位置：${contextPath.trim()}\n\n` : "";
+  return `${ctx}材料如下（最多拆出 ${max} 条）：\n\n${chunk}`;
 }

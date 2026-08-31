@@ -58,6 +58,19 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 ## 变更历史
 
+- 2026-08-31（知识库管理优化批次，依据《深入理解 AI Agent》第 3 章/第 9 章）：**① 双向引用网络（§3.3.2）**——
+  正文支持 `[[条目标题]]` 链接：`lib/links.ts` 解析，`components/concept-body.tsx` 渲染（保持 `<pre>`
+  纯文本语义、未解析链接灰显），详情页新增「被引用」反向链接面板（`findBacklinks`，ILIKE + 转义）。
+  **② 失效内容降权（§3.3.3.2）**——搜索打分对 `status='deprecated'` 条目 -150；列表/仪表盘/详情显示
+  「已废弃」徽标。**③ 写入时精确查重（§3.3.3.2 去重）**——`createConcept` 在调用者视野内比对当前版本
+  正文哈希，完全相同即抛 `DuplicateBodyError` → API 409 并返回 `existingId/existingTitle`，表单给出
+  跳转链接；`lib/withRoute` 新增映射。**④ ingest 上下文锚定分块（§3.3.5 Contextual Retrieval）**——
+  `splitMarkdownWithPaths` 为每块携带标题面包屑（`第一章 > 第二节`），经 `位置：` 前缀注入提取 prompt，
+  系统提示要求条目标题自含主体、代词还原；`splitMarkdown` 契约不变（委托新函数）。**⑤ 只读整理报告
+  （§3.3.3.2 定期整理 + §9.3.3 修剪）**——`npm run curate [--days N]`：疑似重复（正文哈希相同）/
+  失效 `[[…]]` 链接 / 缺描述 / 超期未更新，只读不写。**未做**：语义搜索激活仍待 embedding 端点
+  （本批不依赖 embedding）；冲突审核/Claim 抽取属后续阶段。测试 85 通过（新增 links 6 + 分块路径 5），
+  `npm run check` + build 通过。
 - 2026-08-30（应用侧 LLM 三件套，731de55）：**① ingest 流水线产品化**——`npm run ingest -- <file.md>
   [--write] [--category 前缀] [--max N]`：Markdown 按标题/段落分块（`lib/ingest.ts`，≤2800 字符/块、
   小碎片前向合并）→ LLM 原子化提取（OpenAI 兼容，默认 dry-run，`--write` 才落库）→ 标题检索查重
