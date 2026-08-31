@@ -71,6 +71,16 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
   失效 `[[…]]` 链接 / 缺描述 / 超期未更新，只读不写。**未做**：语义搜索激活仍待 embedding 端点
   （本批不依赖 embedding）；冲突审核/Claim 抽取属后续阶段。测试 85 通过（新增 links 6 + 分块路径 5），
   `npm run check` + build 通过。
+- 2026-08-31（深夜，语义搜索激活 + 空窗口召回修复，2f7427c）：**① 激活**——服务器 .env 配置
+  百炼兼容端点（`dashscope.aliyuncs.com/compatible-mode/v1`，`text-embedding-v4`，1024 维）→
+  `db:embed-backfill`（17 条全量向量化，建表 + 钉维度 + HNSW）→ 重启。**② 修复存量缺陷**——
+  `searchConcepts` 的语义扩展原先要求词法窗口非空才运行（`results.length > 0` 门控），纯同义
+  改写查询（零词面重叠）直接返回 0 条——恰是稠密检索存在的意义（书 §3.2.4）。现空词法窗口时
+  直接按余弦近邻返回（合成降序分 100-5i，total=列表长，仅首页）；`rerankWithSemantic` 路径不变。
+  同批 `conceptRowsForIds` 补漏 `category` 列并把 owner 字段收敛为 `SearchResult` 的 undefined 形态
+  （旧 `as unknown as T` 强转掩盖了两处）。线上验证：「怎么把应用搬到云服务器上」→ 命中 ECS 部署
+  全流程条目；词面查询的 RRF 融合不退化。凭证：embedding key 走 `LLM_EMBEDDING_*`（与聊天
+  DeepSeek 分离），经文件追加写入不回显。
 - 2026-08-30（应用侧 LLM 三件套，731de55）：**① ingest 流水线产品化**——`npm run ingest -- <file.md>
   [--write] [--category 前缀] [--max N]`：Markdown 按标题/段落分块（`lib/ingest.ts`，≤2800 字符/块、
   小碎片前向合并）→ LLM 原子化提取（OpenAI 兼容，默认 dry-run，`--write` 才落库）→ 标题检索查重
