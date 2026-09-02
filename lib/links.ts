@@ -62,3 +62,25 @@ export function segmentBodyWithLinks(
   }
   return segments;
 }
+
+/** Replace every `[[标题]]` in `body` with a Markdown link whose destination
+ * is the `wiki:` scheme + percent-encoded title. Rendering resolves the
+ * scheme against a title→id map (components/concept-body.tsx); unresolvable
+ * references render dim. Titles cannot contain `]` (WIKI_LINK_RE), so the
+ * link syntax is unambiguous; encodeURIComponent strips spaces/parens from
+ * the destination so no `<...>` wrapping is needed. Link text backslash-
+ * escapes Markdown inline specials so a title like `a*b` cannot start
+ * emphasis. */
+export function embedWikiLinks(body: string): string {
+  const refs = parseWikiLinks(body);
+  if (refs.length === 0) return body;
+  let out = "";
+  let cursor = 0;
+  for (const ref of refs) {
+    out += body.slice(cursor, ref.start);
+    out += `[${ref.title.replace(/([\\`*_[\]])/g, "\\$1")}](wiki:${encodeURIComponent(ref.title)})`;
+    cursor = ref.end;
+  }
+  out += body.slice(cursor);
+  return out;
+}

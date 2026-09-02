@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseWikiLinks, segmentBodyWithLinks } from "../lib/links";
+import { embedWikiLinks, parseWikiLinks, segmentBodyWithLinks } from "../lib/links";
 
 describe("parseWikiLinks", () => {
   it("extracts titles in order with positions", () => {
@@ -43,5 +43,33 @@ describe("segmentBodyWithLinks", () => {
       .map((s) => (s.kind === "text" ? s.text : `[[${s.title}]]`))
       .join("");
     expect(rebuilt).toBe(body);
+  });
+});
+
+describe("embedWikiLinks", () => {
+  it("returns the body unchanged when no wiki links exist", () => {
+    const body = "# 标题\n\n普通段落，无链接。";
+    expect(embedWikiLinks(body)).toBe(body);
+  });
+
+  it("converts every reference to a wiki-scheme markdown link", () => {
+    expect(embedWikiLinks("a [[X]] b [[Y]] c")).toBe("a [X](wiki:X) b [Y](wiki:Y) c");
+  });
+
+  it("percent-encodes CJK and spaces in the destination", () => {
+    expect(embedWikiLinks("见 [[深 入 理解]]")).toBe(
+      "见 [深 入 理解](wiki:%E6%B7%B1%20%E5%85%A5%20%E7%90%86%E8%A7%A3)"
+    );
+  });
+
+  it("escapes markdown inline specials in link text but not the destination", () => {
+    expect(embedWikiLinks("[[a*b_c]]")).toBe("[a\\*b\\_c](wiki:a*b_c)");
+  });
+
+  it("preserves surrounding text including code fences", () => {
+    const body = "```bash\ndocker compose up -d\n```\n\n见 [[混合检索]]。";
+    expect(embedWikiLinks(body)).toBe(
+      "```bash\ndocker compose up -d\n```\n\n见 [混合检索](wiki:%E6%B7%B7%E5%90%88%E6%A3%80%E7%B4%A2)。"
+    );
   });
 });
