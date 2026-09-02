@@ -132,6 +132,7 @@ export async function conceptRowsForIds(
     updated_at: string;
     owner_id: string | undefined;
     owner_username: string | undefined;
+    attachment_count: number;
     body_markdown: string;
   }[]
 > {
@@ -149,11 +150,13 @@ export async function conceptRowsForIds(
     updated_at: string;
     owner_id: string | null;
     owner_username: string | null;
+    attachment_count: number;
     body_markdown: string;
   }>(
     `SELECT c.id, c.type, c.title, c.description, c.category, c.status, c.tags,
             c.current_version, c.created_at, c.updated_at,
             c.owner_id, ou.username AS owner_username,
+            (SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count,
             left(v.body_markdown, 500) AS body_markdown
      FROM concepts c
      LEFT JOIN users ou ON ou.id = c.owner_id

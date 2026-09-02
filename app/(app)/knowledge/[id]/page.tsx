@@ -39,6 +39,11 @@ export default async function ConceptDetailPage({
           <h1 className="text-2xl font-semibold">{concept.title}</h1>
           <span className="rounded bg-zinc-200 px-2 py-0.5 text-xs dark:bg-zinc-700">{concept.type}</span>
           <span className="rounded bg-zinc-200 px-2 py-0.5 text-xs dark:bg-zinc-700">{concept.status}</span>
+          {concept.attachment_count > 0 && (
+            <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+              📎 {concept.attachment_count} 附件
+            </span>
+          )}
           <span className="text-xs text-zinc-400 dark:text-zinc-500">v{concept.current_version}</span>
         </div>
         {concept.description && <p className="mt-1 text-zinc-600 dark:text-zinc-300">{concept.description}</p>}
@@ -62,6 +67,11 @@ export default async function ConceptDetailPage({
       </div>
 
       <section>
+        <h2 className="mb-2 font-medium">当前正文（v{concept.current_version}）</h2>
+        <ConceptBody body={bodyText} titleToId={titleToId} />
+      </section>
+
+      <section>
         <h2 className="mb-3 font-medium">编辑（保存生成新版本 v{concept.current_version + 1}）</h2>
         <div className="rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
           <ConceptForm
@@ -78,11 +88,6 @@ export default async function ConceptDetailPage({
             }}
           />
         </div>
-      </section>
-
-      <section>
-        <h2 className="mb-2 font-medium">当前正文（v{concept.current_version}）</h2>
-        <ConceptBody body={bodyText} titleToId={titleToId} />
       </section>
 
       {backlinks.length > 0 && (

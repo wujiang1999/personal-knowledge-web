@@ -7,6 +7,8 @@ import Link from "next/link";
 export interface DirectoryTreeConcept {
   id: string;
   title: string;
+  /** Attachment count; > 0 renders a 📎 badge next to the title. */
+  attachments?: number;
 }
 
 export interface DirectoryTreeFolder {
@@ -157,6 +159,11 @@ function FolderNode({
             <div key={c.id} className="ml-5 py-0.5">
               <Link href={`/knowledge/${c.id}`} className="text-sm text-zinc-600 hover:underline dark:text-zinc-400">
                 {c.title}
+                {typeof c.attachments === "number" && c.attachments > 0 && (
+                  <span className="ml-1.5 rounded bg-amber-100 px-1 text-xs text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title={`${c.attachments} 个附件`}>
+                    📎{c.attachments}
+                  </span>
+                )}
               </Link>
             </div>
           ))}
@@ -209,6 +216,11 @@ function RootConceptsNode({
           <div key={c.id} className="ml-5 py-0.5">
             <Link href={`/knowledge/${c.id}`} className="text-sm text-zinc-600 hover:underline dark:text-zinc-400">
               {c.title}
+            {typeof c.attachments === "number" && c.attachments > 0 && (
+              <span className="ml-1.5 rounded bg-amber-100 px-1 text-xs text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title={`${c.attachments} 个附件`}>
+                📎{c.attachments}
+              </span>
+            )}
             </Link>
           </div>
         ))}

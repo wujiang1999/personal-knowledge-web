@@ -37,6 +37,9 @@ export interface Concept {
   /** Populated on list/detail/search reads; lets an admin tell whose row it is. */
   owner_id?: string;
   owner_username?: string;
+  /** Files uploaded under this concept. Populated by a COUNT subquery on
+   * list/detail/search reads; never mutated by hand. */
+  attachment_count: number;
 }
 
 export interface ConceptVersion {
@@ -111,7 +114,10 @@ export async function listConcepts(opts: {
     params.push(opts.category);
     where.push(`(c.category = $${params.length} OR c.category LIKE $${params.length} || '/%')`);
   }
-  let sql = "SELECT c.*, ou.username AS owner_username FROM concepts c LEFT JOIN users ou ON ou.id = c.owner_id";
+  let sql =
+    "SELECT c.*, ou.username AS owner_username, " +
+    "(SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count " +
+    "FROM concepts c LEFT JOIN users ou ON ou.id = c.owner_id";
   if (where.length) sql += " WHERE " + where.join(" AND ");
   sql += " ORDER BY c.updated_at DESC";
   if (opts.limit) {
@@ -383,11 +389,15 @@ export async function getConceptDetail(id: string, user: ScopeUser): Promise<Con
   const { rows } =
     user.role === "admin"
       ? await query<Concept>(
-          "SELECT c.*, ou.username AS owner_username FROM concepts c LEFT JOIN users ou ON ou.id = c.owner_id WHERE c.id = $1",
+          `SELECT c.*, ou.username AS owner_username,
+            (SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count
+          FROM concepts c LEFT JOIN users ou ON ou.id = c.owner_id WHERE c.id = $1`,
           [id]
         )
       : await query<Concept>(
-          "SELECT c.*, ou.username AS owner_username FROM concepts c LEFT JOIN users ou ON ou.id = c.owner_id WHERE c.id = $1 AND c.owner_id = $2",
+          `SELECT c.*, ou.username AS owner_username,
+            (SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count
+          FROM concepts c LEFT JOIN users ou ON ou.id = c.owner_id WHERE c.id = $1 AND c.owner_id = $2`,
           [id, user.id]
         );
   if (rows.length === 0) return null;
@@ -398,6 +408,7 @@ export async function getConceptDetail(id: string, user: ScopeUser): Promise<Con
   );
   return { ...concept, versions: versions.rows };
 }
+
 export interface SearchResult extends Concept {
   body_markdown: string;
   score: number;
@@ -513,6 +524,7 @@ export async function searchConcepts(
       c.id, c.type, c.title, c.description, c.status, c.tags,
       c.current_version, c.created_at, c.updated_at,
       c.owner_id, ou.username AS owner_username,
+      (SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count,
       -- Total match count for pagination (evaluated over the full window).
       count(*) over() AS total_count,
       -- Search results only ever render a ~2-line preview (UI) or feed a

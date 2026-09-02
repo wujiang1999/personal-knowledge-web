@@ -13,7 +13,7 @@ function toFolder(node: CategoryTreeNode): DirectoryTreeFolder {
     key: node.path,
     name: node.name,
     total: countSubtree(node),
-    concepts: node.concepts.map((c) => ({ id: c.id, title: c.title })),
+    concepts: node.concepts.map((c) => ({ id: c.id, title: c.title, attachments: c.attachment_count })),
     children: node.children.map(toFolder),
   };
 }
@@ -63,7 +63,7 @@ export default async function DashboardPage() {
           {roots.length === 0 && rootConcepts.length === 0 ? (
             <p className="text-sm text-zinc-400 dark:text-zinc-500">还没有知识条目，点击「新建知识」开始</p>
           ) : (
-            <DirectoryTree roots={roots.map(toFolder)} rootConcepts={rootConcepts.map((c) => ({ id: c.id, title: c.title }))} />
+            <DirectoryTree roots={roots.map(toFolder)} rootConcepts={rootConcepts.map((c) => ({ id: c.id, title: c.title, attachments: c.attachment_count }))} />
           )}
         </div>
       </section>
@@ -83,6 +83,11 @@ export default async function DashboardPage() {
                 <span className="font-medium">{c.title}</span>
                 {c.category && <span className="ml-2 text-xs text-zinc-400 dark:text-zinc-500">{c.category}</span>}
                 <span className="ml-2 text-xs text-zinc-400 dark:text-zinc-500">{c.type}</span>
+                {c.attachment_count > 0 && (
+                  <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                    📎 {c.attachment_count}
+                  </span>
+                )}
                 {c.status === "deprecated" && (
                   <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-600 dark:bg-red-900/40 dark:text-red-300">已废弃</span>
                 )}
