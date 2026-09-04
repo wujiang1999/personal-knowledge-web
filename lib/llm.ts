@@ -240,6 +240,7 @@ export async function llmEmbed(
     if (vectors.some((v) => v === null || v.length === 0)) {
       throw new Error("LLM embeddings 返回缺少向量");
     }
+    logLlmCall(log(true, null));
     return vectors.filter((v): v is number[] => v !== null);
   } catch (err) {
     logLlmCall(log(false, err instanceof Error ? err.message : String(err)));
