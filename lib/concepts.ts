@@ -1036,9 +1036,9 @@ export async function resolveLinkTargets(
 /** Concepts whose current body MENTIONS `targetTitle` as plain text without
  * linking it — the Obsidian "unlinked mentions" pattern (deterministic; the
  * snippet is shown for human confirmation, an LLM pass is overkill while the
- * context is visible). The link-absence check is alias-aware: any
- * `[[title…` prefix (plain or `[[title|alias]]`) counts as linked.
- * Case-insensitive. */
+ * context is visible). The check is occurrence-level: a body that links the
+ * title SOMEWHERE can still carry an unlinked mention elsewhere (only
+ * occurrences directly preceded by "[[" count as linked). Case-insensitive. */
 export async function findUnlinkedMentions(
   user: ScopeUser,
   targetId: string,
@@ -1052,24 +1052,34 @@ export async function findUnlinkedMentions(
      JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
      WHERE c.id <> $1
        AND position(lower($2) IN lower(v.body_markdown)) > 0
-       AND position(lower($3) IN lower(v.body_markdown)) = 0
-       ${user.role === "admin" ? "" : "AND c.owner_id = $4"}
+       ${user.role === "admin" ? "" : "AND c.owner_id = $3"}
      LIMIT ${Math.max(1, Math.min(50, limit))}`,
-    user.role === "admin"
-      ? [targetId, targetTitle, `[[${targetTitle}`]
-      : [targetId, targetTitle, `[[${targetTitle}`, user.id]
+    user.role === "admin" ? [targetId, targetTitle] : [targetId, targetTitle, user.id]
   );
   const lowerTitle = targetTitle.toLowerCase();
-  return rows.map((r) => {
-    const idx = r.body_markdown.toLowerCase().indexOf(lowerTitle);
-    const from = Math.max(0, idx - 40);
-    const to = idx + targetTitle.length + 40;
+  const out: { id: string; title: string; snippet: string }[] = [];
+  for (const r of rows) {
+    const lower = r.body_markdown.toLowerCase();
+    let hit = -1;
+    let idx = lower.indexOf(lowerTitle);
+    while (idx !== -1) {
+      if (lower.slice(idx - 2, idx) !== "[[") {
+        hit = idx;
+        break;
+      }
+      idx = lower.indexOf(lowerTitle, idx + 1);
+    }
+    if (hit === -1) continue;
+    const from = Math.max(0, hit - 40);
+    const to = hit + targetTitle.length + 40;
     const snippet =
       (from > 0 ? "…" : "") +
       r.body_markdown.slice(from, to).replace(/\s+/g, " ").trim() +
       (to < r.body_markdown.length ? "…" : "");
-    return { id: r.id, title: r.title, snippet };
-  });
+    out.push({ id: r.id, title: r.title, snippet });
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 /** Concepts whose current body links to `targetTitle` via `[[targetTitle]]`
