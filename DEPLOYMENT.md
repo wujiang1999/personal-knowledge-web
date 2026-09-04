@@ -208,3 +208,20 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
   （`/api/export/okf` + settings 按钮），未重复建设。本地门禁 108 测试过；线上端到端验证（relay 浏览器）：
   别名渲染为显示名且指向正确 target、未解析链接 href 带预填 title、链接到面板两行状态正确、
   `?title=` 预填、`[[强` 前缀排序补全 + Enter 插入、Ctrl+K 打开→过滤→跳转全通过；测试条目与临时 key 已清理。
+- 2026-09-04（深夜，Obsidian 范式第二批，c3dfc59+7298214+2f98180+c737b33）：**① 搜索算子**
+  `tag:x` / `category:"路径"`（精确路径或子目录前缀）/ `status:draft`——`lib/search-syntax` 纯解析
+  （引号值、重复 tag、未知 status 忽略、空算子剥离），BM25 语料 CTE 与算子-only 列表两条路径都带过滤
+  （prepared statement 名编码子句形态），**语义召回同样带过滤**（`semanticCandidates`/`rerankWithSemantic`
+  接收 parsed filters，修复 category 过滤被向量召回绕过的泄漏）；算子-only 查询走独立参数数组
+  （pg 无法推断未引用参数类型，曾 500）。**② 建条目模板**（`lib/templates.ts`，create 模式选择器，
+  追加不覆盖、联动类型字段）。**③ 草稿持久化**——全表单 800ms 防抖入 localStorage（per-context key），
+  挂载时差异检测出「恢复/丢弃」横幅，保存成功即清；effect 内 setState 延迟一帧绕开
+  react-hooks/set-state-in-effect。**④ 未链接提及**——详情页「未链接提及」面板 + curate 第 5 节，
+  occurrence 级检测（body 内 `[[title…` 前缀的 occurrence 算已链接，混合体只报裸提及处），ASCII
+  词边界防误报，snippet 供人确认。**⑤ 图谱视图**——`/graph` + `GET /api/graph`（节点=可见条目、
+  边=已解析 `[[链接]]`，内存解析零额外查询），ECharts 力导向（动态导入 tree-shaken 包，目录着色、
+  度数定节点大小、点击跳转），导航新增「图谱」。修复随批：BM25/算子 SELECT 补 `category` 列
+  （此前搜索结果 category 恒 null）。115 测试过 + deploy.sh 门禁 + 线上验证（干净无头浏览器：
+  图谱 canvas 渲染 18 节点、提及面板 occurrence 级命中、模板骨架、草稿恢复/丢弃、算子三类查询）。
+  **教训**：CDP relay 后台标签页可能出现 JS 全冻结病理（零 console 错误、解析期脚本全不执行）——
+  线上功能验证必须用独立无头浏览器实例 + CDP setCookie 注入会话，不能用 relay 后台标签下结论。
