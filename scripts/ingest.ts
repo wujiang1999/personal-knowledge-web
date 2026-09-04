@@ -63,10 +63,14 @@ async function main() {
   const raw: unknown[] = [];
   for (const [i, chunk] of chunks.entries()) {
     try {
-      const out = await llmChatJsonWith<unknown>(cfg, [
-        { role: "system", content: INGEST_SYSTEM_PROMPT },
-        { role: "user", content: ingestUserPrompt(chunk, max, paths[i]) },
-      ]);
+      const out = await llmChatJsonWith<unknown>(
+        cfg,
+        [
+          { role: "system", content: INGEST_SYSTEM_PROMPT },
+          { role: "user", content: ingestUserPrompt(chunk, max, paths[i]) },
+        ],
+        { meta: { purpose: "ingest-atomize", userId: owner.id } }
+      );
       if (Array.isArray(out)) raw.push(...out);
       process.stderr.write(`[ingest] 提取 ${i + 1}/${chunks.length} 完成\n`);
     } catch (err) {
@@ -83,7 +87,7 @@ async function main() {
   for (const c of candidates) {
     let deduped = false;
     try {
-      const { results } = await searchConcepts({ id: owner.id, role: owner.role }, c.title, 5);
+      const { results } = await searchConcepts({ id: owner.id, role: owner.role }, c.title, 5, 0, "ingest");
       const best = results[0];
       if (best && (best.score >= 25 || best.title === c.title)) {
         dupes.push({ title: c.title, match: best.title, score: best.score });

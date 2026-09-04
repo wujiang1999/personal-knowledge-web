@@ -63,7 +63,7 @@ export async function rerankWithSemantic<T extends { id: string; score: number }
   lexical: T[],
   limit: number
 ): Promise<T[]> {
-  const [queryVector] = await llmEmbed([needle.slice(0, 4000)]);
+  const [queryVector] = await llmEmbed([needle.slice(0, 4000)], { purpose: "search-embed", userId: user.id });
   const semCands = await semanticCandidates(user, queryVector, Math.max(limit * 2, 20));
   const simById = new Map(semCands.map((c) => [c.id, c.similarity]));
   const fused = rrfMerge<{ id: string }>([

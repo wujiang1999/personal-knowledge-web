@@ -24,8 +24,8 @@ export async function generateSummaryForConcept(conceptId: string): Promise<Summ
   if (!cfg) return { status: "skipped", reason: "LLM 未配置" };
   if (!isAutoSummaryEnabled()) return { status: "skipped", reason: "LLM_AUTO_SUMMARY 未开启" };
 
-  const cur = await query<{ title: string; description: string | null; body_markdown: string }>(
-    `SELECT c.title, c.description, v.body_markdown
+  const cur = await query<{ owner_id: string; title: string; description: string | null; body_markdown: string }>(
+    `SELECT c.owner_id, c.title, c.description, v.body_markdown
      FROM concepts c
      JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
      WHERE c.id = $1`,
@@ -34,7 +34,7 @@ export async function generateSummaryForConcept(conceptId: string): Promise<Summ
   if (cur.rows.length === 0) return { status: "skipped", reason: "concept not found" };
   if (cur.rows[0].description) return { status: "skipped", reason: "description 已存在" };
 
-  const { title, body_markdown } = cur.rows[0];
+  const { owner_id, title, body_markdown } = cur.rows[0];
   const data = await llmChatJson<{ description?: unknown }>([
     {
       role: "system",
@@ -45,7 +45,7 @@ export async function generateSummaryForConcept(conceptId: string): Promise<Summ
       role: "user",
       content: `标题：${title}\n\n正文：\n${body_markdown.slice(0, BODY_WINDOW)}`,
     },
-  ]);
+  ], { meta: { purpose: "auto-summary", userId: owner_id } });
   const description = typeof data.description === "string" ? data.description.trim().slice(0, SUMMARY_MAX_CHARS) : "";
   if (!description) return { status: "skipped", reason: "LLM 返回空描述" };
 

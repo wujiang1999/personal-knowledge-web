@@ -20,7 +20,7 @@ export default async function KnowledgePage({
   if (query) {
     // Ranked search, paginated the same way as the list view; the query also
     // returns the total match count for the pager.
-    const { results: r, total: t } = await searchConcepts(user, query, PAGE_SIZE, (page - 1) * PAGE_SIZE);
+    const { results: r, total: t } = await searchConcepts(user, query, PAGE_SIZE, (page - 1) * PAGE_SIZE, "ui");
     results = r;
     total = t;
     hasMore = page * PAGE_SIZE < t;

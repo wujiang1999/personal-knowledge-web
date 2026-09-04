@@ -62,7 +62,7 @@ async function main() {
     const texts = rows.map(
       (r) => `${r.title}\n${r.description ?? ""}\n${r.body_markdown.slice(0, 6000)}`
     );
-    const vectors = await llmEmbed(texts);
+    const vectors = await llmEmbed(texts, { purpose: "backfill" });
     if (vectors[0].length !== cfg.dimensions) {
       throw new Error(
         `embedding 实际维度 ${vectors[0].length} 与 LLM_EMBEDDING_DIMENSIONS=${cfg.dimensions} 不符,请修正配置后重跑`

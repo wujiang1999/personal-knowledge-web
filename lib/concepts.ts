@@ -5,6 +5,7 @@ import type { ScopeUser } from "./requireUser";
 import { conceptRowsForIds, hasSemanticSearch, rerankWithSemantic, semanticCandidates } from "./semantic";
 import { llmEmbed } from "./llm";
 import { BM25_B, BM25_K1, DEPRECATED_FACTOR, tokenizeQuery } from "./bm25";
+import { logSearch } from "./logs";
 
 /** Thrown when a concept lookup by id finds no row (typed 404, not string-match). */
 export class NotFoundError extends Error {}
@@ -438,8 +439,15 @@ export async function searchConcepts(
   user: ScopeUser,
   q: string,
   limit = 20,
-  offset = 0
+  offset = 0,
+  // Caller surface recorded in search_logs: ui | api | ingest.
+  source = "api"
 ): Promise<{ results: SearchResult[]; total: number }> {
+  const startedAt = Date.now();
+  // Which path answered: bm25 | trgm-fallback | semantic-only ("none" only
+  // when every stage failed). Cache hits skip logging entirely — the same
+  // query was logged at most SEARCH_CACHE_TTL ago.
+  let mode = "none";
   const needle = q.trim().slice(0, 200);
   if (!needle) return { results: [], total: 0 };
 
@@ -555,6 +563,7 @@ export async function searchConcepts(
   } finally {
     client.release();
   }
+  if (lexicalResults.length > 0) mode = "bm25";
 
   // Typo tolerance: exact-term BM25 misses near-miss strings ("数所库" vs
   // "数据库" share no bigram); a trigram pass over the raw needle surfaces
@@ -563,6 +572,7 @@ export async function searchConcepts(
     try {
       lexicalResults = await searchTrgmFuzzy(user, needle, limit);
       total = lexicalResults.length;
+      mode = "trgm-fallback";
     } catch (err) {
       console.error(
         "[search] trgm fallback failed:",
@@ -585,7 +595,7 @@ export async function searchConcepts(
       if (lexicalResults.length > 0) {
         results = await rerankWithSemantic(user, needle, lexicalResults, limit);
       } else {
-        const [queryVector] = await llmEmbed([needle.slice(0, 4000)]);
+        const [queryVector] = await llmEmbed([needle.slice(0, 4000)], { purpose: "search-embed", userId: user.id });
         const semCands = await semanticCandidates(user, queryVector, limit);
         const ids = semCands.map((c) => c.id);
         const semRows = ids.length ? await conceptRowsForIds(user, ids) : [];
@@ -602,6 +612,7 @@ export async function searchConcepts(
         // count(*) over() reported 0 for the empty window; the semantic list
         // is the honest match count for this (page-1-only) path.
         totalOut = results.length;
+        mode = "semantic-only";
       }
     } catch (err) {
       console.error(
@@ -622,6 +633,17 @@ export async function searchConcepts(
     deduped.push(r);
   }
   results = deduped;
+  // Usage record for /logs (query record page). Fire-and-forget; cache hits
+  // above never reach this line.
+  logSearch({
+    userId: user.id,
+    query: needle,
+    source,
+    mode,
+    resultCount: results.length,
+    total: totalOut,
+    tookMs: Date.now() - startedAt,
+  });
 
   if (searchCache.size >= SEARCH_CACHE_MAX) {
     const oldest = searchCache.keys().next().value;
