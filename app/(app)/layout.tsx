@@ -7,6 +7,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 const links = [
   { href: "/dashboard", label: "概览" },
   { href: "/knowledge", label: "知识" },
+  { href: "/graph", label: "图谱" },
   { href: "/sources", label: "来源" },
   { href: "/logs", label: "记录" },
   { href: "/settings", label: "设置" },

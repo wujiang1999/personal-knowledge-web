@@ -6,6 +6,7 @@ import { conceptRowsForIds, hasSemanticSearch, rerankWithSemantic, semanticCandi
 import { llmEmbed } from "./llm";
 import { BM25_B, BM25_K1, DEPRECATED_FACTOR, tokenizeQuery } from "./bm25";
 import { logSearch } from "./logs";
+import { parseSearchQuery } from "./search-syntax";
 
 /** Thrown when a concept lookup by id finds no row (typed 404, not string-match). */
 export class NotFoundError extends Error {}
@@ -448,10 +449,16 @@ export async function searchConcepts(
   // when every stage failed). Cache hits skip logging entirely — the same
   // query was logged at most SEARCH_CACHE_TTL ago.
   let mode = "none";
-  const needle = q.trim().slice(0, 200);
-  if (!needle) return { results: [], total: 0 };
+  // Operators (tag:/category:/status:) are stripped from the matching text;
+  // the RAW query keys the cache and rides search_logs verbatim.
+  const parsed = parseSearchQuery(q);
+  const rawKey = q.trim().slice(0, 200);
+  const needle = parsed.text.replace(/\s+/g, " ").trim().slice(0, 200);
+  if (!needle && parsed.tags.length === 0 && !parsed.category && !parsed.status) {
+    return { results: [], total: 0 };
+  }
 
-  const cacheKey = `${user.id}:${user.role}|${needle}|${limit}|${offset}`;
+  const cacheKey = `${user.id}:${user.role}|${rawKey}|${limit}|${offset}`;
   const cached = searchCache.get(cacheKey);
   if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL) {
     return { results: cached.results, total: cached.total };
@@ -462,7 +469,7 @@ export async function searchConcepts(
   // above return early and never trigger it. Failure degrades to
   // lexical-only: logged here, the stage below sees undefined.
   const embedPromise =
-    offset === 0 && (await hasSemanticSearch())
+    offset === 0 && needle.length > 0 && (await hasSemanticSearch())
       ? llmEmbed([needle.slice(0, 4000)], { purpose: "search-embed", userId: user.id })
           .then((v) => v[0])
           .catch((err: unknown) => {
@@ -478,11 +485,28 @@ export async function searchConcepts(
   const terms = tokenizeQuery(needle);
 
   // $1 = ownerId, $2 = terms[], $3 = needle (preview anchor), $4 = limit,
-  // $5 = offset; the role check is appended last for the admin bypass.
+  // $5 = offset; the role check is appended last for the admin bypass, then
+  // operator filters (values only — clause presence is encoded in the
+  // prepared-statement name, so each shape plans once per connection).
   const params: unknown[] = [user.id, terms, needle, limit, offset];
   const ownerClause = isAdmin
     ? `($${((params.push(user.role), params.length))}::text = 'admin' OR c.owner_id = $1)`
     : "c.owner_id = $1";
+  const filterClauses: string[] = [];
+  if (parsed.tags.length > 0) {
+    const idx = (params.push(parsed.tags), params.length);
+    filterClauses.push(`c.tags @> $${idx}::text[]`);
+  }
+  if (parsed.category) {
+    const idx = (params.push(parsed.category), params.length);
+    filterClauses.push(`(c.category = $${idx} OR c.category LIKE $${idx} || '/%')`);
+  }
+  if (parsed.status) {
+    const idx = (params.push(parsed.status), params.length);
+    filterClauses.push(`c.status = $${idx}`);
+  }
+  const filterSql = filterClauses.length ? " AND " + filterClauses.join(" AND ") : "";
+  const filterShape = `${parsed.tags.length ? "T" : ""}${parsed.category ? "C" : ""}${parsed.status ? "S" : ""}`;
 
   const sql = `
     WITH corpus AS MATERIALIZED (
@@ -497,7 +521,7 @@ export async function searchConcepts(
       LEFT JOIN users ou ON ou.id = c.owner_id
       JOIN concept_versions v
         ON v.concept_id = c.id AND v.version_number = c.current_version
-      WHERE ${ownerClause}
+      WHERE ${ownerClause}${filterSql}
     ),
     -- Corpus-wide document frequency per term, using the same lower()ed
     -- substring definition as tf below, so idf and tf agree.
@@ -556,28 +580,70 @@ export async function searchConcepts(
   // cost ~65ms planning per cold search). The text is deterministic per
   // scope shape; connections are replaced on deploy, which invalidates old
   // prepared statements naturally.
-  const client = await getPool().connect();
-  let lexicalResults: SearchResult[];
-  let total: number;
-  try {
-    await client.query("BEGIN");
-    const stmtName = `search_bm25_v1${isAdmin ? "_admin" : "_user"}`;
-    const { rows } = await client.query<SearchResult & { total_count: string }>({ name: stmtName, text: sql, values: params as never[] });
-    await client.query("COMMIT");
-    // count(*) over() rides on the rows; an offset past the end has no rows
-    // and therefore reports total 0 — the UI simply shows an empty page.
-    total = rows.length > 0 ? Number(rows[0].total_count) : 0;
-    lexicalResults = rows.map(({ total_count, ...r }) => {
-      void total_count;
-      return r;
-    });
-  } catch (err) {
-    await client.query("ROLLBACK").catch(() => {});
-    throw err;
-  } finally {
-    client.release();
+  let lexicalResults: SearchResult[] = [];
+  let total = 0;
+  if (terms.length === 0) {
+    // Operators only (no free text): plain scoped listing, newest first —
+    // the natural "status:draft" / "tag:pg" filter-listing query.
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      const stmtName = `search_filter_v1_${isAdmin ? "admin" : "user"}_${filterShape}`;
+      const { rows } = await client.query<SearchResult & { total_count: string }>({
+        name: stmtName,
+        text: `
+          SELECT c.id, c.type, c.title, c.description, c.status, c.tags,
+                 c.current_version, c.created_at, c.updated_at, c.owner_id,
+                 ou.username AS owner_username,
+                 (SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count,
+                 substring(v.body_markdown from 1 for 500) AS body_markdown,
+                 count(*) over () AS total_count,
+                 0::float8 AS score
+          FROM concepts c
+          LEFT JOIN users ou ON ou.id = c.owner_id
+          JOIN concept_versions v
+            ON v.concept_id = c.id AND v.version_number = c.current_version
+          WHERE ${ownerClause}${filterSql}
+          ORDER BY c.updated_at DESC
+          LIMIT $4 OFFSET $5
+        `,
+        values: params as never[],
+      });
+      await client.query("COMMIT");
+      total = rows.length > 0 ? Number(rows[0].total_count) : 0;
+      lexicalResults = rows.map(({ total_count, ...r }) => {
+        void total_count;
+        return r;
+      });
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+    mode = "operators";
+  } else {
+    const client = await getPool().connect();
+    try {
+      await client.query("BEGIN");
+      const stmtName = `search_bm25_v1_${isAdmin ? "admin" : "user"}_${filterShape || "plain"}`;
+      const { rows } = await client.query<SearchResult & { total_count: string }>({ name: stmtName, text: sql, values: params as never[] });
+      await client.query("COMMIT");
+      // count(*) over() rides on the rows; an offset past the end has no rows
+      // and therefore reports total 0 — the UI simply shows an empty page.
+      total = rows.length > 0 ? Number(rows[0].total_count) : 0;
+      lexicalResults = rows.map(({ total_count, ...r }) => {
+        void total_count;
+        return r;
+      });
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+    if (lexicalResults.length > 0) mode = "bm25";
   }
-  if (lexicalResults.length > 0) mode = "bm25";
 
   // Typo tolerance: exact-term BM25 misses near-miss strings ("数所库" vs
   // "数据库" share no bigram); a trigram pass over the raw needle surfaces
@@ -651,7 +717,7 @@ export async function searchConcepts(
   // above never reach this line.
   logSearch({
     userId: user.id,
-    query: needle,
+    query: rawKey,
     source,
     mode,
     resultCount: results.length,
@@ -969,6 +1035,45 @@ export async function resolveLinkTargets(
     if (!map.has(key)) map.set(key, r.id);
   }
   return map;
+}
+
+/** Concepts whose current body MENTIONS `targetTitle` as plain text without
+ * linking it — the Obsidian "unlinked mentions" pattern (deterministic; the
+ * snippet is shown for human confirmation, an LLM pass is overkill while the
+ * context is visible). The link-absence check is alias-aware: any
+ * `[[title…` prefix (plain or `[[title|alias]]`) counts as linked.
+ * Case-insensitive. */
+export async function findUnlinkedMentions(
+  user: ScopeUser,
+  targetId: string,
+  targetTitle: string,
+  limit = 20
+): Promise<{ id: string; title: string; snippet: string }[]> {
+  if (targetTitle.trim().length < 2) return [];
+  const { rows } = await query<{ id: string; title: string; body_markdown: string }>(
+    `SELECT c.id, c.title, v.body_markdown
+     FROM concepts c
+     JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
+     WHERE c.id <> $1
+       AND position(lower($2) IN lower(v.body_markdown)) > 0
+       AND position(lower($3) IN lower(v.body_markdown)) = 0
+       ${user.role === "admin" ? "" : "AND c.owner_id = $4"}
+     LIMIT ${Math.max(1, Math.min(50, limit))}`,
+    user.role === "admin"
+      ? [targetId, targetTitle, `[[${targetTitle}`]
+      : [targetId, targetTitle, `[[${targetTitle}`, user.id]
+  );
+  const lowerTitle = targetTitle.toLowerCase();
+  return rows.map((r) => {
+    const idx = r.body_markdown.toLowerCase().indexOf(lowerTitle);
+    const from = Math.max(0, idx - 40);
+    const to = idx + targetTitle.length + 40;
+    const snippet =
+      (from > 0 ? "…" : "") +
+      r.body_markdown.slice(from, to).replace(/\s+/g, " ").trim() +
+      (to < r.body_markdown.length ? "…" : "");
+    return { id: r.id, title: r.title, snippet };
+  });
 }
 
 /** Concepts whose current body links to `targetTitle` via `[[targetTitle]]`

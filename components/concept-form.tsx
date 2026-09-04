@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { BODY_TEMPLATES, type BodyTemplate } from "@/lib/templates";
 
 export interface ConceptFormInitial {
   id?: string;
@@ -32,6 +33,121 @@ export function ConceptForm({
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [duplicate, setDuplicate] = useState<{ id: string; title: string } | null>(null);
+
+  // ---- Draft persistence (Obsidian unsaved-changes safety) ----------------
+  // Every input debounces (800ms) into localStorage under a per-context key;
+  // on mount a draft that differs from the initial values surfaces a restore
+  // banner. Cleared on successful save. Best-effort: storage failures are
+  // swallowed — losing a draft hint must never break the form.
+  interface DraftData {
+    title: string;
+    type: string;
+    description: string;
+    category: string;
+    tags: string;
+    status: string;
+    body: string;
+    at: number;
+  }
+  const draftKey = mode === "create" ? "kb-draft:new" : `kb-draft:${initial?.id ?? ""}`;
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const typeRef = useRef<HTMLInputElement | null>(null);
+  const draftTimer = useRef<number | null>(null);
+  const [restorable, setRestorable] = useState<{ data: DraftData; at: number } | null>(null);
+
+  useEffect(() => {
+    // The draft banner must appear only after mount; defer the state update
+    // one tick so the effect body never triggers a cascading render
+    // (react-hooks/set-state-in-effect).
+    const timer = window.setTimeout(() => {
+      try {
+        const raw = window.localStorage.getItem(draftKey);
+        if (!raw) return;
+        const d = JSON.parse(raw) as Partial<DraftData>;
+        if (typeof d.body !== "string" || typeof d.title !== "string") return;
+        const sameAsInitial =
+          d.title === (initial?.title ?? "") &&
+          d.body === (initial?.body ?? "") &&
+          d.description === (initial?.description ?? "") &&
+          d.category === (initial?.category ?? "") &&
+          (d.tags ?? "") === (initial?.tags?.join(", ") ?? "") &&
+          d.status === (initial?.status ?? "stable") &&
+          d.type === (initial?.type ?? "Note");
+        if (!sameAsInitial) {
+          setRestorable({
+            data: d as DraftData,
+            at: typeof d.at === "number" ? d.at : 0,
+          });
+        }
+      } catch {
+        /* corrupted draft: ignore */
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // initial is stable per mount; the draft context key is the real dep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+
+  function onFormInput() {
+    if (draftTimer.current !== null) window.clearTimeout(draftTimer.current);
+    draftTimer.current = window.setTimeout(() => {
+      const form = formRef.current;
+      if (!form) return;
+      const fd = new FormData(form);
+      const data: DraftData = {
+        title: String(fd.get("title") ?? ""),
+        type: String(fd.get("type") ?? "Note"),
+        description: String(fd.get("description") ?? ""),
+        category: String(fd.get("category") ?? ""),
+        tags: String(fd.get("tags") ?? ""),
+        status: String(fd.get("status") ?? "stable"),
+        body: String(fd.get("body") ?? ""),
+        at: Date.now(),
+      };
+      try {
+        window.localStorage.setItem(draftKey, JSON.stringify(data));
+      } catch {
+        /* storage full/unavailable: best effort */
+      }
+    }, 800);
+  }
+
+  function restoreDraft() {
+    if (!restorable) return;
+    const d = restorable.data;
+    const form = formRef.current;
+    if (form) {
+      const set = (name: string, value: string) => {
+        const el = form.elements.namedItem(name);
+        if (el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
+          el.value = value;
+        }
+      };
+      set("title", d.title);
+      set("type", d.type);
+      set("description", d.description);
+      set("category", d.category);
+      set("tags", d.tags);
+      set("status", d.status);
+    }
+    setBody(d.body);
+    setRestorable(null);
+  }
+
+  function discardDraft() {
+    try {
+      window.localStorage.removeItem(draftKey);
+    } catch {
+      /* best effort */
+    }
+    setRestorable(null);
+  }
+
+  function applyTemplate(t: BodyTemplate) {
+    setBody((cur) => (cur.trim() ? `${cur.trimEnd()}\n\n${t.body}` : t.body));
+    if (typeRef.current && typeRef.current.value === "Note") typeRef.current.value = t.type;
+    bodyRef.current?.focus();
+  }
 
   // ---- [[ autocomplete (Obsidian quick-link pattern) -----------------------
   // Titles come from GET /api/concepts?limit=200 and are filtered CLIENT-side
@@ -160,6 +276,11 @@ export function ConceptForm({
       }
 
       const data = await res.json().catch(() => ({}));
+      try {
+        window.localStorage.removeItem(draftKey);
+      } catch {
+        /* best effort */
+      }
       if (mode === "edit" && data.created === false) {
         setError("");
         setNotice("正文没有变化，未生成新版本；标题 / 标签等元信息已保存。");
@@ -177,7 +298,29 @@ export function ConceptForm({
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4">
+    <form ref={formRef} onInput={onFormInput} onSubmit={onSubmit} className="space-y-4">
+      {restorable && (
+        <p className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          <span>
+            检测到未保存草稿
+            {restorable.at ? `（${new Date(restorable.at).toLocaleString("zh-CN")}）` : ""}。
+          </span>
+          <button
+            type="button"
+            onClick={restoreDraft}
+            className="rounded bg-amber-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-amber-500"
+          >
+            恢复
+          </button>
+          <button
+            type="button"
+            onClick={discardDraft}
+            className="rounded border border-amber-400 px-2 py-0.5 text-xs hover:bg-amber-100 dark:hover:bg-amber-900"
+          >
+            丢弃
+          </button>
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className={labelCls}>标题 *</label>
@@ -185,7 +328,7 @@ export function ConceptForm({
         </div>
         <div>
           <label className={labelCls}>类型</label>
-          <input name="type" list="okf-types" defaultValue={initial?.type ?? "Note"} className={inputCls} />
+          <input ref={typeRef} name="type" list="okf-types" defaultValue={initial?.type ?? "Note"} className={inputCls} />
           <datalist id="okf-types">
             <option value="Note" />
             <option value="Technical Note" />
@@ -238,6 +381,28 @@ export function ConceptForm({
           className={inputCls}
         />
       </div>
+
+      {mode === "create" && (
+        <div>
+          <label className={labelCls}>模板（插入正文骨架，不覆盖已有内容）</label>
+          <select
+            defaultValue=""
+            onChange={(e) => {
+              const t = BODY_TEMPLATES.find((x) => x.id === e.target.value);
+              if (t) applyTemplate(t);
+              e.currentTarget.value = "";
+            }}
+            className={inputCls}
+          >
+            <option value="">选择模板…</option>
+            {BODY_TEMPLATES.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <div>
         <label className={labelCls}>正文（Markdown）*</label>

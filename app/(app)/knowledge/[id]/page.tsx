@@ -1,7 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/requireUser";
-import { findBacklinks, getConceptDetail, resolveLinkTargets } from "@/lib/concepts";
+import {
+  findBacklinks,
+  findUnlinkedMentions,
+  getConceptDetail,
+  resolveLinkTargets,
+} from "@/lib/concepts";
 import { parseWikiLinks } from "@/lib/links";
 import { ConceptBody } from "@/components/concept-body";
 import { ConceptForm } from "@/components/concept-form";
@@ -25,9 +30,10 @@ export default async function ConceptDetailPage({
   // target collapse to one panel row (first-mention order kept).
   const outgoingRefs = parseWikiLinks(bodyText);
   const uniqueOutgoing = [...new Map(outgoingRefs.map((r) => [r.title, r])).values()];
-  const [titleToId, backlinks] = await Promise.all([
+  const [titleToId, backlinks, unlinked] = await Promise.all([
     resolveLinkTargets(user, uniqueOutgoing.map((r) => r.title)),
     findBacklinks(user, concept.id, concept.title),
+    findUnlinkedMentions(user, concept.id, concept.title),
   ]);
 
   return (
@@ -141,6 +147,27 @@ export default async function ConceptDetailPage({
                 </li>
               );
             })}
+          </ul>
+        </section>
+      )}
+
+      {unlinked.length > 0 && (
+        <section>
+          <h2 className="mb-2 font-medium">未链接提及（{unlinked.length}）</h2>
+          <p className="mb-2 text-xs text-zinc-400 dark:text-zinc-500">
+            以下条目正文提到了本条目标题但尚未加{" "}
+            <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">[[链接]]</code>
+            ，可在对应条目的编辑器里补上。
+          </p>
+          <ul className="divide-y rounded-lg border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
+            {unlinked.map((m) => (
+              <li key={m.id} className="px-4 py-2 text-sm">
+                <Link href={`/knowledge/${m.id}`} className="hover:underline">
+                  {m.title}
+                </Link>
+                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{m.snippet}</p>
+              </li>
+            ))}
           </ul>
         </section>
       )}

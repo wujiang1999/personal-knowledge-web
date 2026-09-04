@@ -16,8 +16,9 @@ loadEnv();
  *   2. 失效链接  — [[标题]] references that resolve to no concept
  *   3. 缺描述    — stable concepts without a description (auto-summary miss)
  *   4. 长期未更新 — no update within the staleness window
+ *   5. 未链接提及 — a body mentions another entry's title as plain text
+ *      without [[linking]] it (Obsidian "unlinked mentions", deterministic)
  */
-
 interface Row {
   id: string;
   title: string;
@@ -91,7 +92,42 @@ async function main() {
   for (const r of stale.slice(0, 50)) {
     console.log(`   - ${fmt(r.id, r.title)}（最后更新 ${new Date(r.updated_at).toLocaleDateString("zh-CN")}，${r.status}）`);
   }
-  if (stale.length > 50) console.log(`   …及其余 ${stale.length - 50} 条`);
+
+  // 5. Unlinked mentions (Obsidian pattern): a body mentions another entry's
+  // title as plain text without [[linking]] it. Deterministic in-memory scan
+  // (corpus is small); titles under 2 chars are noise, ASCII titles require
+  // non-alphanumeric neighbors so "AI" doesn't match "AISLE". Any
+  // [[title… prefix in the body (plain or alias) marks the pair as linked.
+  const unlinked: { from: Row; target: Row }[] = [];
+  const isAscii = (s: string) => /^[\x20-\x7e]+$/.test(s);
+  for (const src of rows) {
+    const lower = src.body_markdown.toLowerCase();
+    for (const target of rows) {
+      if (target.id === src.id) continue;
+      const t = target.title;
+      if (t.length < 2) continue;
+      const lt = t.toLowerCase();
+      if (lower.includes(`[[${lt}`)) continue;
+      let idx = lower.indexOf(lt);
+      while (idx !== -1) {
+        if (isAscii(t)) {
+          const before = idx > 0 ? lower[idx - 1] : " ";
+          const after = idx + lt.length < lower.length ? lower[idx + lt.length] : " ";
+          if (/[a-z0-9]/.test(before) || /[a-z0-9]/.test(after)) {
+            idx = lower.indexOf(lt, idx + 1);
+            continue;
+          }
+        }
+        unlinked.push({ from: src, target });
+        break;
+      }
+    }
+  }
+  console.log(`\n5. 未链接提及（正文提到标题但未加 [[链接]]）：${unlinked.length} 处`);
+  for (const u of unlinked.slice(0, 50)) {
+    console.log(`   - ${fmt(u.from.id, u.from.title)} 提到「${u.target.title}」`);
+  }
+  if (unlinked.length > 50) console.log(`   …及其余 ${unlinked.length - 50} 处`);
 
   await closePool();
 }
