@@ -1,19 +1,27 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { EditorView, keymap } from "@codemirror/view";
-import { Compartment } from "@codemirror/state";
-import { indentWithTab } from "@codemirror/commands";
+import {
+  EditorView,
+  keymap,
+  highlightSpecialChars,
+  drawSelection,
+  dropCursor,
+  rectangularSelection,
+  crosshairCursor,
+  highlightActiveLine,
+} from "@codemirror/view";
+import { EditorState, Compartment } from "@codemirror/state";
+import { indentWithTab, defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { autocompletion, type CompletionContext, type Completion } from "@codemirror/autocomplete";
-import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
+import { indentOnInput, syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 // CodeMirror's language-data registry loads individual grammars on demand
 // through its own runtime loader — a genuine runtime-selected plugin case;
 // every other module here is author-time known and statically imported.
 import { languages } from "@codemirror/language-data";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { basicSetup } from "codemirror";
-
 export interface EditorTitle {
   id: string;
   title: string;
@@ -132,11 +140,23 @@ export function MarkdownEditor({
       doc: valueRef.current,
       parent: hostRef.current,
       extensions: [
-        // Must precede basicSetup: CodeMirror keeps only the FIRST
-        // autocompletion instance, and ours carries the [[ override source.
+        // Explicit composition instead of basicSetup: basicSetup embeds its
+        // own autocompletion() whose duplicate state field/facets fight our
+        // override source. closeBrackets is also dropped on purpose — it
+        // auto-inserts `]]` while `[[` completion wants to write the closer.
+        EditorState.allowMultipleSelections.of(true),
+        highlightSpecialChars(),
+        history(),
+        drawSelection(),
+        dropCursor(),
+        indentOnInput(),
+        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        rectangularSelection(),
+        crosshairCursor(),
+        highlightActiveLine(),
+        highlightSelectionMatches(),
+        keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab]),
         autocompletion({ override: [wikiSource] }),
-        basicSetup,
-        keymap.of([indentWithTab]),
         EditorView.lineWrapping,
         markdown({ base: markdownLanguage, codeLanguages: languages }),
         themeComp.current.of(dark ? oneDark : []),
@@ -144,7 +164,6 @@ export function MarkdownEditor({
           "&": { backgroundColor: "transparent", height: "100%" },
           ".cm-scroller": { fontFamily: "inherit" },
         }),
-        syntaxHighlighting(HighlightStyle.define([])),
         EditorView.updateListener.of((u) => {
           if (!u.docChanged) return;
           const v = u.state.doc.toString();
