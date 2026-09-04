@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 import { getSessionSecret } from "@/lib/config";
+import { publicRequestUrl } from "@/lib/publicUrl";
 
 const PUBLIC_PATHS = ["/login"];
 const LOGIN_API = "/api/auth/login";
@@ -17,24 +18,6 @@ async function isValidSession(req: NextRequest): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function publicRequestUrl(req: NextRequest): URL {
-  const url = req.nextUrl.clone();
-  const forwardedHost = req.headers.get("x-forwarded-host")?.split(",")[0].trim();
-  const forwardedProto = req.headers.get("x-forwarded-proto")?.split(",")[0].trim();
-
-  // `next start -H 127.0.0.1` uses its bind address as req.nextUrl's origin.
-  // Caddy overwrites these forwarded headers, so redirects retain the public
-  // HTTPS domain rather than leaking the private upstream address.
-  if (forwardedHost) {
-    url.host = forwardedHost;
-    url.port = "";
-  }
-  if (forwardedProto === "http" || forwardedProto === "https") {
-    url.protocol = `${forwardedProto}:`;
-  }
-  return url;
 }
 
 export default async function proxy(req: NextRequest) {

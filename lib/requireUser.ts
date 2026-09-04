@@ -27,8 +27,12 @@ export async function requireUser(): Promise<AuthUser> {
   );
   // token_version is the authoritative revocation check: middleware only
   // verifies the JWT signature (it runs on Edge and cannot reach pg). A token
-  // whose tv is out of date (e.g. after a password change) is rejected here.
-  if (rows.length === 0 || rows[0].token_version !== session.tokenVersion) redirect("/login");
+  // whose tv is out of date (e.g. after a password change or a logout on
+  // another device) is rejected here. Redirect to the expire endpoint, not
+  // /login: the proxy would bounce a signature-valid cookie straight back to
+  // /dashboard, so /login would loop forever (renders as a black screen).
+  // /api/auth/expire deletes the cookie so the next hop reaches the form.
+  if (rows.length === 0 || rows[0].token_version !== session.tokenVersion) redirect("/api/auth/expire");
   return {
     id: rows[0].id,
     username: rows[0].username,

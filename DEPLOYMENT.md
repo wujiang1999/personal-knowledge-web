@@ -175,3 +175,12 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
   同批轮换 MCP 的 `KB_API_KEY`（`personal-kb-mcp` → `personal-kb-mcp-r3`；旧 key 吊销）——
   排查过程曾把 key 明文回显到终端记录，故立即轮换；使用中的 MCP 客户端会话需重启才会拿到
   新 dist 与新 key。
+- 2026-09-04（晚间，陈旧会话黑屏修复）：用户登录后陷入 /login↔/dashboard 重定向循环（黑屏）复发——
+  与 08-28 事故同根因的另一条触发路径：**在其他设备登出/改密会使 `token_version`+1**，其余设备里的
+  旧 Cookie 签名仍有效（SESSION_SECRET 未变），Edge 中间件（无法查库）把 /login 307 弹回 /dashboard，
+  而 `requireUser` 查库发现 tv 不匹配又踢回 /login → 死循环，浏览器中止后呈黑屏。访问日志可见
+  /login 307 与 /dashboard 200 每秒十余次交替。修复：`requireUser` 在行缺失/tv 不匹配时改重定向到
+  新增的 **`GET /api/auth/expire`**（`destroySession()` 清 Cookie 后 307 回 /login，公网 Location 复用
+  抽出的 `lib/publicUrl.ts` 助手），下一跳即拿到干净登录页，循环类问题终结；`proxy.ts` 同步改用
+  lib 助手（行为不变）。部署后端到端验证：手工铸造 tv 过期 Cookie 访问 /dashboard，链路
+  /dashboard → /api/auth/expire → /login 全部按预期，登录表单可达。
