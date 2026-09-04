@@ -2,12 +2,46 @@ www.wujiangai.art {
 	redir https://wujiangai.art{uri} permanent
 }
 
-# 门户: / = 导航页, /answers/ = 答案之书, /atlas/ = 话费套餐图鉴
-# (2026-08-25 合并, wujiang1999.art 已下线)
+# 门户: / = 导航页, /answers/ = 答案之书, /atlas/ = 大模型套餐图鉴
+# 缓存策略(2026-08-31): HTML 不缓存;每日数据 5 分钟;县界数据(不可变,带 ?v=) 7 天;其余静态 1 天。
+# 注意顺序: 后写的 header 覆盖先写的。
 wujiangai.art {
+	log {
+		output file /var/log/caddy/wujiang-access.log
+	}
 	root * /srv/wujiang-portal
 	encode zstd gzip
-	header Cache-Control "no-cache"
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	# 缓存策略: 四条互斥规则,靠排除法保证不依赖书写顺序
+	# (Caddy 会把无匹配器的 header 排到带匹配器之后执行,兜底规则会覆盖细分规则)
+	@fresh path / /index.html *.html /answers/ /atlas/ /countymap/ /stocks/ /digest/ /birds/ /modelcheck/ /robots.txt /sitemap.xml /modelcheck/api/*
+	header @fresh Cache-Control "no-cache"
+
+	@daily path /stocks/data/* /digest/data/* /digest/feed.xml
+	header @daily Cache-Control "max-age=300"
+
+	# 县界 geo 数据为不可变文件(精简时带版本标记),长缓存;
+	# 页面请求带 ?v= 参数,数据换版时自动失效
+	@geo path /countymap/data/*
+	header @geo Cache-Control "public, max-age=604800"
+
+	@static {
+		not path / /index.html *.html /answers/ /atlas/ /countymap/ /stocks/ /digest/ /birds/ /modelcheck/ /robots.txt /sitemap.xml /stocks/data/* /digest/data/* /digest/feed.xml /countymap/data/* /modelcheck/api/*
+	}
+	header @static Cache-Control "public, max-age=86400"
+
+	# 免费模型连通性检测 API: 反代本机 modelcheck 服务(systemd, 127.0.0.1:8791)
+	# /modelcheck/ 静态页走 file_server, 仅 /modelcheck/api/* 进入反代
+	@apimc path /modelcheck/api/*
+	reverse_proxy @apimc 127.0.0.1:8791
+
 	file_server
 }
 
