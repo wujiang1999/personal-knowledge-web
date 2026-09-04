@@ -21,9 +21,12 @@ export default async function ConceptDetailPage({
   const current = concept.versions.find((v) => v.version_number === concept.current_version);
   const bodyText = current?.body_markdown ?? "";
   // Bidirectional link network (§3.3.2): resolve outgoing [[标题]] targets and
-  // look up incoming backlinks in parallel.
+  // look up incoming backlinks in parallel. Repeated mentions of the same
+  // target collapse to one panel row (first-mention order kept).
+  const outgoingRefs = parseWikiLinks(bodyText);
+  const uniqueOutgoing = [...new Map(outgoingRefs.map((r) => [r.title, r])).values()];
   const [titleToId, backlinks] = await Promise.all([
-    resolveLinkTargets(user, parseWikiLinks(bodyText).map((r) => r.title)),
+    resolveLinkTargets(user, uniqueOutgoing.map((r) => r.title)),
     findBacklinks(user, concept.id, concept.title),
   ]);
 
@@ -104,6 +107,40 @@ export default async function ConceptDetailPage({
                 </span>
               </li>
             ))}
+          </ul>
+        </section>
+      )}
+
+      {uniqueOutgoing.length > 0 && (
+        <section>
+          <h2 className="mb-2 font-medium">链接到（{uniqueOutgoing.length}）</h2>
+          <ul className="divide-y rounded-lg border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
+            {uniqueOutgoing.map((ref) => {
+              const targetId = titleToId.get(ref.title.toLowerCase());
+              return (
+                <li key={ref.title} className="flex items-center justify-between px-4 py-2 text-sm">
+                  {targetId ? (
+                    <Link
+                      href={`/knowledge/${targetId}`}
+                      className="font-medium text-blue-600 hover:underline dark:text-blue-400"
+                    >
+                      {ref.title}
+                    </Link>
+                  ) : (
+                    <Link
+                      href={`/knowledge/new?title=${encodeURIComponent(ref.title)}`}
+                      className="text-zinc-400 underline decoration-dotted underline-offset-2 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300"
+                      title="未创建，点击创建"
+                    >
+                      {ref.title}
+                    </Link>
+                  )}
+                  <span className="text-xs text-zinc-400 dark:text-zinc-500">
+                    {targetId ? "已创建" : "未创建"}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}

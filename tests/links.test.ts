@@ -31,16 +31,31 @@ describe("segmentBodyWithLinks", () => {
     const segs = segmentBodyWithLinks("用 [[RRF 融合]] 合并，但 [[不存在的条目]] 不行", targets);
     expect(segs).toHaveLength(5);
     expect(segs[0]).toEqual({ kind: "text", text: "用 " });
-    expect(segs[1]).toEqual({ kind: "link", title: "RRF 融合", targetId: "id-rrf" });
+    expect(segs[1]).toEqual({ kind: "link", title: "RRF 融合", display: "RRF 融合", targetId: "id-rrf" });
     expect(segs[2]).toEqual({ kind: "text", text: " 合并，但 " });
-    expect(segs[3]).toEqual({ kind: "link", title: "不存在的条目", targetId: null });
+    expect(segs[3]).toEqual({ kind: "link", title: "不存在的条目", display: "不存在的条目", targetId: null });
     expect(segs[4]).toEqual({ kind: "text", text: " 不行" });
   });
-  it("round-trips: concatenated segments reproduce the source", () => {
-    const body = "前缀 [[A]] 中缀 [[B]] 后缀";
+
+  it("splits [[target|display]] aliases: pure target, display text", () => {
+    const refs = parseWikiLinks("见 [[RRF 融合|RRF]] 与 [[空别名|]]。");
+    expect(refs).toEqual([
+      { title: "RRF 融合", display: "RRF", start: 2, end: 16 },
+      { title: "空别名", display: "空别名", start: 19, end: 27 },
+    ]);
+  });
+
+  it("segment keeps alias display while resolving by target", () => {
+    const segs = segmentBodyWithLinks("用 [[RRF 融合|RRF]] 合并", targets);
+    expect(segs[1]).toEqual({ kind: "link", title: "RRF 融合", display: "RRF", targetId: "id-rrf" });
+  });
+  it("round-trips: concatenated segments reproduce the source (incl. aliases)", () => {
+    const body = "前缀 [[A]] 中缀 [[B|乙]] 后缀";
     const segs = segmentBodyWithLinks(body, new Map());
     const rebuilt = segs
-      .map((s) => (s.kind === "text" ? s.text : `[[${s.title}]]`))
+      .map((s) =>
+        s.kind === "text" ? s.text : `[[${s.title}${s.display === s.title ? "" : `|${s.display}`}]]`
+      )
       .join("");
     expect(rebuilt).toBe(body);
   });

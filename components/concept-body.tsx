@@ -8,9 +8,10 @@ import { embedWikiLinks } from "@/lib/links";
  * default, keeping the previous `<pre>` rendering's XSS-safe-by-construction
  * property. `[[标题]]` wiki references are embedded as `wiki:`-scheme links
  * (lib/links.ts `embedWikiLinks`) and resolved here against `titleToId`:
- * resolved targets link to the concept page; unresolved ones render dimmed
- * so the reader sees a broken reference instead of silent text. Server
- * component — react-markdown never ships to the client bundle. */
+ * resolved targets link to the concept page; unresolved ones render as
+ * dotted links that open the create form prefilled with the missing title
+ * (Obsidian's click-to-create pattern). Server component — react-markdown
+ * never ships to the client bundle. */
 export function ConceptBody({
   body,
   titleToId,
@@ -33,12 +34,13 @@ export function ConceptBody({
         );
       }
       return (
-        <span
-          className="text-zinc-400 line-through decoration-zinc-300 dark:text-zinc-500"
-          title="未找到同名条目"
+        <Link
+          href={`/knowledge/new?title=${encodeURIComponent(title)}`}
+          className="text-zinc-400 underline decoration-dotted underline-offset-2 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300"
+          title="未找到同名条目，点击创建"
         >
           {children}
-        </span>
+        </Link>
       );
     }
     return (

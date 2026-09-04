@@ -971,24 +971,26 @@ export async function resolveLinkTargets(
   return map;
 }
 
-/** Concepts whose current body links to `targetTitle` via `[[targetTitle]]`,
- * newest first — the backlink panel of a concept page. */
+/** Concepts whose current body links to `targetTitle` via `[[targetTitle]]`
+ * or the alias form `[[targetTitle|display]]`, newest first — the backlink
+ * panel of a concept page. */
 export async function findBacklinks(
   user: ScopeUser,
   targetId: string,
   targetTitle: string,
   limit = 50
 ): Promise<{ id: string; title: string; updated_at: string }[]> {
-  const pattern = `%${escapeLike(`[[${targetTitle}]]`)}%`;
+  const exact = `%${escapeLike(`[[${targetTitle}]]`)}%`;
+  const aliased = `%${escapeLike(`[[${targetTitle}|`)}%`;
   const { rows } = await query<{ id: string; title: string; updated_at: string }>(
     `SELECT c.id, c.title, c.updated_at
      FROM concepts c
      JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
-     WHERE c.id <> $1 AND v.body_markdown ILIKE $2 ESCAPE '\\'
-       ${user.role === "admin" ? "" : "AND c.owner_id = $3"}
+     WHERE c.id <> $1 AND (v.body_markdown ILIKE $2 ESCAPE '\\' OR v.body_markdown ILIKE $3 ESCAPE '\\')
+       ${user.role === "admin" ? "" : "AND c.owner_id = $4"}
      ORDER BY c.updated_at DESC
      LIMIT ${Math.max(1, Math.min(200, limit))}`,
-    user.role === "admin" ? [targetId, pattern] : [targetId, pattern, user.id]
+    user.role === "admin" ? [targetId, exact, aliased] : [targetId, exact, aliased, user.id]
   );
   return rows;
 }

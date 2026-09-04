@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/requireUser";
 import { LogoutButton } from "@/components/logout-button";
+import { QuickSwitcher } from "@/components/quick-switcher";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 const links = [
@@ -31,6 +32,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             ))}
           </nav>
           <div className="flex items-center gap-1">
+            <QuickSwitcher />
             <ThemeToggle />
             <span className="text-sm text-zinc-500 dark:text-zinc-400">{user.username}</span>
             <LogoutButton />

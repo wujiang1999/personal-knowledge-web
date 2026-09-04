@@ -5,8 +5,12 @@
  * components/concept-body.tsx and backlink lookup in lib/concepts.ts. */
 
 export interface WikiLinkRef {
-  /** The referenced title, trimmed (never empty, at most 200 chars). */
+  /** Link target — the concept title to resolve. Pure: any `|display` alias
+   * suffix is stripped here so every downstream lookup (title→id maps,
+   * backlink patterns, curate) sees the real title, never the alias text. */
   title: string;
+  /** Rendered text. Equals the target when no `|alias` is written. */
+  display: string;
   /** Index of the opening `[` in the source text. */
   start: number;
   /** Index one past the closing `]`. */
@@ -17,21 +21,26 @@ export interface WikiLinkRef {
  * runaway `[[` in pasted text cannot build a huge candidate. */
 const WIKI_LINK_RE = /\[\[([^\[\]\n]{1,200})\]\]/g;
 
-/** Extract every wiki link in the text, in order of appearance. Titles are
- * trimmed; whitespace-only references are dropped. */
+/** Extract every wiki link in the text, in order of appearance. The target
+ * is trimmed; an optional `|display` alias (Obsidian-style) splits at the
+ * first `|` — the target stays pure, the alias only affects rendering, and
+ * an empty alias falls back to the target. Whitespace-only targets drop. */
 export function parseWikiLinks(text: string): WikiLinkRef[] {
   const out: WikiLinkRef[] = [];
   for (const m of text.matchAll(WIKI_LINK_RE)) {
-    const title = m[1].trim();
+    const inner = m[1];
+    const bar = inner.indexOf("|");
+    const title = (bar === -1 ? inner : inner.slice(0, bar)).trim();
     if (!title) continue;
-    out.push({ title, start: m.index, end: m.index + m[0].length });
+    const display = bar === -1 ? title : inner.slice(bar + 1).trim() || title;
+    out.push({ title, display, start: m.index, end: m.index + m[0].length });
   }
   return out;
 }
 
 export type BodySegment =
   | { kind: "text"; text: string }
-  | { kind: "link"; title: string; targetId: string | null };
+  | { kind: "link"; title: string; display: string; targetId: string | null };
 
 /** Split a body into text/link segments for rendering. `titleToId` maps
  * lowercased titles of concepts visible to the viewer; links without a match
@@ -53,6 +62,7 @@ export function segmentBodyWithLinks(
     segments.push({
       kind: "link",
       title: ref.title,
+      display: ref.display,
       targetId: titleToId.get(ref.title.toLowerCase()) ?? null,
     });
     cursor = ref.end;
@@ -78,7 +88,7 @@ export function embedWikiLinks(body: string): string {
   let cursor = 0;
   for (const ref of refs) {
     out += body.slice(cursor, ref.start);
-    out += `[${ref.title.replace(/([\\`*_[\]])/g, "\\$1")}](wiki:${encodeURIComponent(ref.title)})`;
+    out += `[${ref.display.replace(/([\\`*_[\]])/g, "\\$1")}](wiki:${encodeURIComponent(ref.title)})`;
     cursor = ref.end;
   }
   out += body.slice(cursor);
