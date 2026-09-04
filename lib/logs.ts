@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { query } from "./db";
 import type { ScopeUser } from "./requireUser";
 
@@ -51,24 +52,55 @@ export interface LlmCallLogInput {
   error: string | null;
 }
 
-export function logLlmCall(input: LlmCallLogInput): void {
-  void query(
+/** API payload contract for POST /api/logs/llm — the shape remote clients
+ * (the MCP judge) report LLM calls with. Validates and clamps: over-long
+ * strings are truncated, absent numerics become null, out-of-range values
+ * are rejected. */
+export const llmCallLogSchema = z.object({
+  kind: z.enum(["llm", "embedding"]),
+  purpose: z
+    .string()
+    .transform((s) => s.trim().slice(0, 50))
+    .pipe(z.string().min(1)),
+  model: z
+    .string()
+    .transform((s) => s.slice(0, 100))
+    .pipe(z.string().min(1)),
+  input_chars: z.number().int().min(0).max(100_000_000).nullish().transform((v) => v ?? null),
+  prompt_tokens: z.number().int().min(0).max(100_000_000).nullish().transform((v) => v ?? null),
+  completion_tokens: z.number().int().min(0).max(100_000_000).nullish().transform((v) => v ?? null),
+  took_ms: z.number().int().min(0).max(3_600_000).nullish().transform((v) => v ?? null),
+  ok: z.boolean(),
+  error: z
+    .string()
+    .nullish()
+    .transform((v) => (typeof v === "string" ? v.slice(0, 500) : null)),
+});
+export type LlmCallLogPayload = z.output<typeof llmCallLogSchema>;
+
+/** Awaited insert used by the ingest API route (the route returns after the
+ * row is durably queued). */
+export async function insertLlmCall(userId: string | null, p: LlmCallLogPayload): Promise<void> {
+  await query(
     `INSERT INTO llm_calls
        (user_id, kind, purpose, model, input_chars, prompt_tokens, completion_tokens, took_ms, ok, error)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-    [
-      input.userId,
-      input.kind,
-      input.purpose.slice(0, 50),
-      input.model.slice(0, 100) || "unknown",
-      Math.max(0, Math.trunc(input.inputChars)),
-      input.promptTokens === null ? null : Math.max(0, Math.trunc(input.promptTokens)),
-      input.completionTokens === null ? null : Math.max(0, Math.trunc(input.completionTokens)),
-      Math.max(0, Math.trunc(input.tookMs)),
-      input.ok,
-      input.error === null ? null : input.error.slice(0, 500),
-    ]
-  ).catch((err: unknown) => {
+    [userId, p.kind, p.purpose, p.model, p.input_chars, p.prompt_tokens, p.completion_tokens, p.took_ms, p.ok, p.error]
+  );
+}
+
+export function logLlmCall(input: LlmCallLogInput): void {
+  void insertLlmCall(input.userId, {
+    kind: input.kind,
+    purpose: input.purpose.slice(0, 50),
+    model: input.model.slice(0, 100) || "unknown",
+    input_chars: Math.max(0, Math.trunc(input.inputChars)),
+    prompt_tokens: input.promptTokens === null ? null : Math.max(0, Math.trunc(input.promptTokens)),
+    completion_tokens: input.completionTokens === null ? null : Math.max(0, Math.trunc(input.completionTokens)),
+    took_ms: Math.max(0, Math.trunc(input.tookMs)),
+    ok: input.ok,
+    error: input.error === null ? null : input.error.slice(0, 500),
+  }).catch((err: unknown) => {
     console.error("[logs] llm call log failed:", err instanceof Error ? err.message : err);
   });
 }
@@ -130,11 +162,7 @@ export async function listLlmCalls(user: ScopeUser, limit = 100): Promise<LlmCal
             u.username
      FROM llm_calls l
      LEFT JOIN users u ON u.id = l.user_id
-     ${
-       user.role === "admin"
-         ? ""
-         : "WHERE l.user_id = $1"
-     }
+     ${user.role === "admin" ? "" : "WHERE l.user_id = $1"}
      ORDER BY l.created_at DESC
      LIMIT ${Math.max(1, Math.min(500, limit))}`,
     user.role === "admin" ? [] : [user.id]

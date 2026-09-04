@@ -10,12 +10,12 @@ const MODE_LABEL: Record<string, string> = {
   "semantic-only": "纯语义",
   none: "无结果",
 };
-
 const PURPOSE_LABEL: Record<string, string> = {
   "auto-summary": "自动摘要",
   "search-embed": "检索向量化",
   "ingest-atomize": "录入原子化",
   backfill: "向量回填",
+  judge: "查重判别",
   chat: "对话",
   embed: "向量化",
 };
