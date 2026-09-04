@@ -225,3 +225,26 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
   图谱 canvas 渲染 18 节点、提及面板 occurrence 级命中、模板骨架、草稿恢复/丢弃、算子三类查询）。
   **教训**：CDP relay 后台标签页可能出现 JS 全冻结病理（零 console 错误、解析期脚本全不执行）——
   线上功能验证必须用独立无头浏览器实例 + CDP setCookie 注入会话，不能用 relay 后台标签下结论。
+
+- 2026-09-04（深夜，Obsidian 范式第三批，a93d2ea+9828e06+07b81e3）：**① transclusion 嵌入**——
+  `![[标题]]` 独占一行 = 块级嵌入（`splitBodyBlocks` fence 感知切分，行内 `![[…]]` 降级为 📄 链接），
+  详情页 EmbedBox 渲染嵌入正文（深度 1，嵌套显占位符即防环），嵌入计入反链/图谱/外链面板
+  （`WikiLinkRef.embed`）；`getBodiesByTitles`（admin/owner 视界、lower(title) 批量取正文）。
+  **② 快速捕获**——`POST /api/capture`（Bearer API key，zod 校验 1-5000 字，标题=首行或「速记
+  日期 时间 前缀」，默认目录 捕获/、status=draft；GET 故意不支持防 key 泄漏日志）。**③ 周期回顾**
+  ——`npm run review [--days N] [--write]`：近 N 天变更按目录分组明细 + DeepSeek 叙事
+  （overview/highlights/suggestions，purpose=weekly-review 入 llm_calls），落库「每周回顾 YYYY-MM-DD」
+  （回顾/，重跑生成新版本），默认 dry-run。**④ CodeMirror 6 编辑器**（`components/markdown-editor.tsx`
+  + `markdown-preview.tsx`）——显式扩展组合（**弃用 basicSetup**：其内嵌 autocompletion 与
+  `autocompletion({override})` 双实例互斥、closeBrackets 会抢写 `]]`）；`[[`/`![[` 补全源
+  （client 过滤 + `|别名` 后缀保留 + **`filter: false` 必须声明**——否则 CM FuzzyMatcher 以原始输入
+  重筛 label，`|` 一输入全部选项被杀；validFor 反而让列表不随输入收窄，弃用）；apply 后光标落
+  `]]` 之后；编辑/预览切换（视图保活，预览懒加载 react-markdown，wiki 语义与 ConceptBody 一致）；
+  隐藏 `<textarea name=body>` 兜住 FormData/草稿。120 测试过 + 生产构建 + 线上验证（无头浏览器：
+  补全四态、别名保序、嵌入渲染 📄+正文、预览切换、`/api/capture` 201→删除→404、`npm run review
+  --write` 生成 LLM 叙事版周报）。**运维坑**：① `git merge | tail -1` 管道吞 merge 失败退出码，
+  部署脚本必须 `set -o pipefail` 或免管道判断；② 服务器 `npm install` 会改脏 package-lock.json
+  卡死后续 ff-merge，已对服务器副本 `git update-index --skip-worktree package-lock.json`；
+  ③ `npm install --omit=dev` 会剪掉 tailwindcss 等 devDependency，服务器构建必须完整 install；
+  ④ Next 16 dev 默认拦跨域静态资源（403），本地调试用 `localhost` 而非 `127.0.0.1`；
+  ⑤ bash 后台任务 300s 截止，SSH 隧道/长驻进程须 `timeout: 0`。
