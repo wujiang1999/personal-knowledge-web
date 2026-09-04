@@ -161,3 +161,17 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
   （XFO/CSP/nosniff 由应用层负责，边缘不重复设置）；DB 密码与 SESSION_SECRET 轮换
   （`rotate-db-password.sh` 重写，服务器端生成不落明文）；服务器残留 Caddyfile 片段归档至
   `~/caddyfile-archive-20260828/`。备份保留以脚本为准（30 天，非旧文档所写 14 天）。
+
+- 2026-09-04（检索方式改造，8d988ae）：查询改为 **BM25 + embedding 混合检索，返回去重 top-k**。
+  `searchConcepts` 的启发式词法打分（ILIKE 覆盖 + trgm + tsquery + pgroonga_score 加权混合）替换为
+  单条 SQL 的全库 BM25：查询按 TokenBigram 形态分词（ASCII 整词 + CJK bigram），词项以单个数组参数
+  进 SQL（预处理语句文本与词数无关），df/tf 共用同一 lower() 子串定义；deprecated 条目 BM25×0.25
+  原位降权；`hasPgroonga` 探测与 tsquery/ILIKE 分支移除（DB 内 pgroonga/trgm/tsv 索引保留未删，
+  无 schema 变更）；pg_trgm 模糊查询保留为空窗口兜底（错字）。语义侧不变：pgvector 余弦召回与词法
+  RRF 融合、零词面重叠时纯语义兜底、输出按 id 去重。实测 BM25 尺度（16 条语料）：自标题命中 43.1、
+  同书相邻章 5.4-8.0、无关词 0 行。阈值重标定：`npm run ingest` 查重 60→25；MCP 仓库
+  （c72a49f，v0.4.0）`kb_search` 默认 limit 20→**3**、judge 候选 5→3、规则合并分数 60→**6.5**。
+  线上验证：词法/改写/无关/typo/单字五类查询行为符合预期，去重成立；MCP stdio 端到端确认默认 top3。
+  同批轮换 MCP 的 `KB_API_KEY`（`personal-kb-mcp` → `personal-kb-mcp-r3`；旧 key 吊销）——
+  排查过程曾把 key 明文回显到终端记录，故立即轮换；使用中的 MCP 客户端会话需重启才会拿到
+  新 dist 与新 key。
