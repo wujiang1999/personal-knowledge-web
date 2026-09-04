@@ -136,7 +136,10 @@ export function MarkdownEditor({
           },
         }));
       if (options.length === 0) return null;
-      return { from, options, validFor: /^[^\[\]\n]*$/ };
+      // filter: false — the source already narrows by query; without this
+      // CM's FuzzyMatcher re-filters the labels against the raw typed text
+      // and kills every option once an alias `|` is typed.
+      return { from, options, filter: false };
     };
 
     const view = new EditorView({
