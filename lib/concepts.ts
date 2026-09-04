@@ -6,7 +6,7 @@ import { conceptRowsForIds, hasSemanticSearch, rerankWithSemantic, semanticCandi
 import { llmEmbed } from "./llm";
 import { BM25_B, BM25_K1, DEPRECATED_FACTOR, tokenizeQuery } from "./bm25";
 import { logSearch } from "./logs";
-import { parseSearchQuery } from "./search-syntax";
+import { operatorFilterClauses, parseSearchQuery } from "./search-syntax";
 
 /** Thrown when a concept lookup by id finds no row (typed 404, not string-match). */
 export class NotFoundError extends Error {}
@@ -492,19 +492,7 @@ export async function searchConcepts(
   const ownerClause = isAdmin
     ? `($${((params.push(user.role), params.length))}::text = 'admin' OR c.owner_id = $1)`
     : "c.owner_id = $1";
-  const filterClauses: string[] = [];
-  if (parsed.tags.length > 0) {
-    const idx = (params.push(parsed.tags), params.length);
-    filterClauses.push(`c.tags @> $${idx}::text[]`);
-  }
-  if (parsed.category) {
-    const idx = (params.push(parsed.category), params.length);
-    filterClauses.push(`(c.category = $${idx} OR c.category LIKE $${idx} || '/%')`);
-  }
-  if (parsed.status) {
-    const idx = (params.push(parsed.status), params.length);
-    filterClauses.push(`c.status = $${idx}`);
-  }
+  const filterClauses = operatorFilterClauses(parsed, params);
   const filterSql = filterClauses.length ? " AND " + filterClauses.join(" AND ") : "";
   const filterShape = `${parsed.tags.length ? "T" : ""}${parsed.category ? "C" : ""}${parsed.status ? "S" : ""}`;
 
@@ -584,7 +572,15 @@ export async function searchConcepts(
   let total = 0;
   if (terms.length === 0) {
     // Operators only (no free text): plain scoped listing, newest first —
-    // the natural "status:draft" / "tag:pg" filter-listing query.
+    // the natural "status:draft" / "tag:pg" filter-listing query. Own param
+    // array: the BM25 base carries $2/$3 (terms / preview anchor) that this
+    // shape never references, and pg cannot type unused parameters.
+    const fparams: unknown[] = [user.id, limit, offset];
+    const fOwner = isAdmin
+      ? `($${((fparams.push(user.role), fparams.length))}::text = 'admin' OR c.owner_id = $1)`
+      : "c.owner_id = $1";
+    const fClauses = operatorFilterClauses(parsed, fparams);
+    const fWhere = fClauses.length ? " AND " + fClauses.join(" AND ") : "";
     const client = await getPool().connect();
     try {
       await client.query("BEGIN");
@@ -603,11 +599,11 @@ export async function searchConcepts(
           LEFT JOIN users ou ON ou.id = c.owner_id
           JOIN concept_versions v
             ON v.concept_id = c.id AND v.version_number = c.current_version
-          WHERE ${ownerClause}${filterSql}
+          WHERE ${fOwner}${fWhere}
           ORDER BY c.updated_at DESC
-          LIMIT $4 OFFSET $5
+          LIMIT $2 OFFSET $3
         `,
-        values: params as never[],
+        values: fparams as never[],
       });
       await client.query("COMMIT");
       total = rows.length > 0 ? Number(rows[0].total_count) : 0;
@@ -674,9 +670,9 @@ export async function searchConcepts(
   if (queryVector) {
     try {
       if (lexicalResults.length > 0) {
-        results = await rerankWithSemantic(user, needle, lexicalResults, limit, queryVector);
+        results = await rerankWithSemantic(user, needle, lexicalResults, limit, queryVector, parsed);
       } else {
-        const semCands = await semanticCandidates(user, queryVector, limit);
+        const semCands = await semanticCandidates(user, queryVector, limit, parsed);
         const ids = semCands.map((c) => c.id);
         const semRows = ids.length ? await conceptRowsForIds(user, ids) : [];
         // Nearest-first ordering: cosine distance ranks the semantic list;

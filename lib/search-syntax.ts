@@ -28,3 +28,24 @@ export function parseSearchQuery(q: string): ParsedQuery {
   });
   return parsed;
 }
+
+/** Operator filters as SQL fragment strings against the `concepts c` alias.
+ * Values are pushed onto `params` (append order = clause order); callers
+ * encode clause PRESENCE in their prepared-statement name, never the values.
+ * Category matches the exact path or any subfolder (slash-boundary). */
+export function operatorFilterClauses(parsed: ParsedQuery, params: unknown[]): string[] {
+  const clauses: string[] = [];
+  if (parsed.tags.length > 0) {
+    const idx = (params.push(parsed.tags), params.length);
+    clauses.push(`c.tags @> $${idx}::text[]`);
+  }
+  if (parsed.category) {
+    const idx = (params.push(parsed.category), params.length);
+    clauses.push(`(c.category = $${idx} OR c.category LIKE $${idx} || '/%')`);
+  }
+  if (parsed.status) {
+    const idx = (params.push(parsed.status), params.length);
+    clauses.push(`c.status = $${idx}`);
+  }
+  return clauses;
+}

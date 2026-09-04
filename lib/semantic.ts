@@ -2,6 +2,7 @@ import { getLlmEmbeddingConfig } from "./config";
 import { query } from "./db";
 import { llmEmbed } from "./llm";
 import type { ScopeUser } from "./requireUser";
+import { operatorFilterClauses, type ParsedQuery } from "./search-syntax";
 
 /** Semantic search over pgvector embeddings of concept bodies. Entirely
  * optional: the runtime probe requires (a) the `vector` extension and
@@ -64,11 +65,14 @@ export async function rerankWithSemantic<T extends { id: string; score: number }
   limit: number,
   /** Precomputed query vector: searchConcepts embeds concurrently with the
    * lexical query; when absent (direct callers), embed here as before. */
-  queryVector?: number[]
+  queryVector?: number[],
+  /** Search-operator filters — constrain vector recall to the same scope
+   * the lexical window was built from. */
+  filters?: ParsedQuery
 ): Promise<T[]> {
   const vector =
     queryVector ?? (await llmEmbed([needle.slice(0, 4000)], { purpose: "search-embed", userId: user.id }))[0];
-  const semCands = await semanticCandidates(user, vector, Math.max(limit * 2, 20));
+  const semCands = await semanticCandidates(user, vector, Math.max(limit * 2, 20), filters);
   const simById = new Map(semCands.map((c) => [c.id, c.similarity]));
   const fused = rrfMerge<{ id: string }>([
     lexical,
@@ -103,16 +107,25 @@ export async function rerankWithSemantic<T extends { id: string; score: number }
 export async function semanticCandidates(
   user: ScopeUser,
   queryVector: number[],
-  limit: number
+  limit: number,
+  /** Search-operator filters (tag:/category:/status:) — without them the
+   * vector recall would leak rows the lexical path just filtered out. */
+  filters?: ParsedQuery
 ): Promise<{ id: string; similarity: number }[]> {
+  const params: unknown[] = [toVectorLiteral(queryVector)];
+  const ownerClause = user.role === "admin" ? "" : `WHERE c.owner_id = $${((params.push(user.id), params.length))}`;
+  const filterClauses = filters ? operatorFilterClauses(filters, params) : [];
+  const where = [ownerClause, ...filterClauses.map((cl) => (ownerClause ? `AND ${cl}` : `WHERE ${cl}`))]
+    .filter(Boolean)
+    .join(" ");
   const { rows } = await query<{ id: string; similarity: number }>(
     `SELECT ce.concept_id AS id, 1 - (ce.embedding <=> $1::vector) AS similarity
      FROM concept_embeddings ce
      JOIN concepts c ON c.id = ce.concept_id
-     ${user.role === "admin" ? "" : "WHERE c.owner_id = $2"}
+     ${where}
      ORDER BY ce.embedding <=> $1::vector
      LIMIT ${limit}`,
-    user.role === "admin" ? [toVectorLiteral(queryVector)] : [toVectorLiteral(queryVector), user.id]
+    params
   );
   return rows;
 }
