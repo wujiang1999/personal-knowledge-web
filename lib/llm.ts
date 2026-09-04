@@ -124,9 +124,25 @@ export interface LlmCallMeta {
   userId?: string | null;
 }
 
+/** Options for the JSON-mode chat calls. */
+export interface ChatOptions {
+  temperature?: number;
+  /**
+   * DeepSeek-v4 reasoning control. Every current caller extracts short JSON
+   * (auto summary, ingest atomization) — thinking is pure latency there: a
+   * 120-char summary once spent 2263 completion tokens reasoning (16.4s
+   * wall clock); with thinking disabled the same task answers in <1s.
+   * Default disabled; pass true for the provider default.
+   */
+  thinking?: boolean;
+  /** Hard cap on generated tokens — bounds the worst case per call. */
+  maxTokens?: number;
+  meta?: LlmCallMeta;
+}
+
 export async function llmChatJson<T>(
   messages: { role: "system" | "user"; content: string }[],
-  opts?: { temperature?: number; meta?: LlmCallMeta }
+  opts?: ChatOptions
 ): Promise<T> {
   const cfg = getLlmChatConfig();
   if (!cfg) throw new Error("LLM 未配置(LLM_BASE_URL/LLM_API_KEY/LLM_MODEL)");
@@ -134,14 +150,16 @@ export async function llmChatJson<T>(
 }
 
 /**
- * One chat completion expecting JSON back. Single attempt with a hard
- * timeout; callers own retry/degradation policy. Every call — success or
- * failure — lands in llm_calls for /logs.
+ * One chat completion expecting JSON back. Hard timeout, plus one plain-body
+ * retry when a provider rejects the DeepSeek-shaped extension fields with a
+ * 4xx (mirrors the MCP judge's response_format fallback). Callers own any
+ * further retry/degradation policy. Every call — success or failure — lands
+ * in llm_calls for /logs.
  */
 export async function llmChatJsonWith<T>(
   cfg: LlmConfig,
   messages: { role: "system" | "user"; content: string }[],
-  opts?: { temperature?: number; meta?: LlmCallMeta }
+  opts?: ChatOptions
 ): Promise<T> {
   const meta = opts?.meta ?? { purpose: "chat" };
   const startedAt = Date.now();
@@ -159,19 +177,24 @@ export async function llmChatJsonWith<T>(
     ok,
     error,
   });
+  const body: Record<string, unknown> = {
+    model: cfg.model,
+    messages,
+    temperature: opts?.temperature ?? 0.2,
+    // Not all providers support response_format; a JSON-parsing prompt plus
+    // tolerant extraction is more portable than a hard JSON mode.
+  };
+  if (opts?.maxTokens) body.max_tokens = opts.maxTokens;
+  const thinkDisabled = opts?.thinking !== true;
+  if (thinkDisabled) body.thinking = { type: "disabled" };
   try {
-    const { ok, status, data } = await postJson(
-      `${cfg.baseUrl}/chat/completions`,
-      cfg.apiKey,
-      {
-        model: cfg.model,
-        messages,
-        temperature: opts?.temperature ?? 0.2,
-        // Not all providers support response_format; a JSON-parsing prompt plus
-        // tolerant extraction is more portable than a hard JSON mode.
-      },
-      CHAT_TIMEOUT_MS
-    );
+    let res = await postJson(`${cfg.baseUrl}/chat/completions`, cfg.apiKey, body, CHAT_TIMEOUT_MS);
+    if (!res.ok && res.status >= 400 && res.status < 500 && thinkDisabled) {
+      const plain = { ...body };
+      delete plain.thinking;
+      res = await postJson(`${cfg.baseUrl}/chat/completions`, cfg.apiKey, plain, CHAT_TIMEOUT_MS);
+    }
+    const { ok, status, data } = res;
     const u = readUsage(data);
     usage.promptTokens = u.promptTokens;
     usage.completionTokens = u.completionTokens;

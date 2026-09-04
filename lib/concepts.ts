@@ -456,6 +456,20 @@ export async function searchConcepts(
   if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL) {
     return { results: cached.results, total: cached.total };
   }
+  // Semantic stage needs a query vector; embed CONCURRENTLY with the lexical
+  // query — the two are independent, and the embedding HTTP round trip
+  // (300-700ms cross-border) otherwise rides the critical path. Cache hits
+  // above return early and never trigger it. Failure degrades to
+  // lexical-only: logged here, the stage below sees undefined.
+  const embedPromise =
+    offset === 0 && (await hasSemanticSearch())
+      ? llmEmbed([needle.slice(0, 4000)], { purpose: "search-embed", userId: user.id })
+          .then((v) => v[0])
+          .catch((err: unknown) => {
+            console.error("[semantic] recall failed, lexical only:", err instanceof Error ? err.message : err);
+            return undefined;
+          })
+      : null;
 
   const isAdmin = user.role === "admin";
   // BM25 terms: lowercase ASCII word runs + CJK bigrams (TokenBigram shape).
@@ -590,12 +604,12 @@ export async function searchConcepts(
   // nearest embeddings alone.
   let results = lexicalResults;
   let totalOut = total;
-  if (offset === 0 && (await hasSemanticSearch())) {
+  const queryVector = embedPromise ? await embedPromise : undefined;
+  if (queryVector) {
     try {
       if (lexicalResults.length > 0) {
-        results = await rerankWithSemantic(user, needle, lexicalResults, limit);
+        results = await rerankWithSemantic(user, needle, lexicalResults, limit, queryVector);
       } else {
-        const [queryVector] = await llmEmbed([needle.slice(0, 4000)], { purpose: "search-embed", userId: user.id });
         const semCands = await semanticCandidates(user, queryVector, limit);
         const ids = semCands.map((c) => c.id);
         const semRows = ids.length ? await conceptRowsForIds(user, ids) : [];

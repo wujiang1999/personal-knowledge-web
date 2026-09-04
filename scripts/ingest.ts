@@ -61,22 +61,31 @@ async function main() {
   };
 
   const raw: unknown[] = [];
-  for (const [i, chunk] of chunks.entries()) {
-    try {
-      const out = await llmChatJsonWith<unknown>(
-        cfg,
-        [
-          { role: "system", content: INGEST_SYSTEM_PROMPT },
-          { role: "user", content: ingestUserPrompt(chunk, max, paths[i]) },
-        ],
-        { meta: { purpose: "ingest-atomize", userId: owner.id } }
-      );
-      if (Array.isArray(out)) raw.push(...out);
-      process.stderr.write(`[ingest] 提取 ${i + 1}/${chunks.length} 完成\n`);
-    } catch (err) {
-      console.error(`[ingest] 第 ${i + 1}/${chunks.length} 块提取失败:`, err instanceof Error ? err.message : err);
+  // Extraction calls are independent per chunk; a small worker pool keeps a
+  // long document from serializing N × (network TTFB + generation). A failed
+  // chunk logs and is skipped, same as the sequential version did.
+  const INGEST_CONCURRENCY = Math.max(1, Number(process.env.INGEST_CONCURRENCY ?? 4));
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < chunks.length) {
+      const i = next++;
+      try {
+        const out = await llmChatJsonWith<unknown>(
+          cfg,
+          [
+            { role: "system", content: INGEST_SYSTEM_PROMPT },
+            { role: "user", content: ingestUserPrompt(chunks[i], max, paths[i]) },
+          ],
+          { meta: { purpose: "ingest-atomize", userId: owner.id }, maxTokens: 4000 }
+        );
+        if (Array.isArray(out)) raw.push(...out);
+        process.stderr.write(`[ingest] 提取 ${i + 1}/${chunks.length} 完成\n`);
+      } catch (err) {
+        console.error(`[ingest] 第 ${i + 1}/${chunks.length} 块提取失败:`, err instanceof Error ? err.message : err);
+      }
     }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(INGEST_CONCURRENCY, chunks.length) }, () => worker()));
 
   const { candidates, dropped } = validateCandidates(raw, { baseCategory: baseCategory || undefined, max });
   console.error(`[ingest] 候选 ${candidates.length} 条(丢弃无效 ${dropped} 条)`);

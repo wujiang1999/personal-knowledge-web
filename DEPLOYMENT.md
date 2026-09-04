@@ -184,3 +184,15 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
   抽出的 `lib/publicUrl.ts` 助手），下一跳即拿到干净登录页，循环类问题终结；`proxy.ts` 同步改用
   lib 助手（行为不变）。部署后端到端验证：手工铸造 tv 过期 Cookie 访问 /dashboard，链路
   /dashboard → /api/auth/expire → /login 全部按预期，登录表单可达。
+- 2026-09-04（晚间，LLM 调用耗时优化）：/logs 实测定位——`auto-summary` 一次 16.4s（输入仅 178 字符，
+  completion 2263 tokens）：`deepseek-v4-flash` **默认开启 thinking**，为"≤120 字摘要"白烧推理 tokens；
+  全链路无 `max_tokens` 上限。服务器直压对照：同任务关 thinking + 限长 200 → **0.18s**（≈90×）。
+  网络面：首尔 → api.deepseek.com TTFB 固定 0.2-0.5s；embedding 走 DashScope 中国区跨境 0.17-0.9s
+  （国际版端点 TTFB 减半但需国际版 key，现有 CN key 401，暂不换）。优化：**① `llmChatJsonWith` 支持
+  按调用 `thinking`（默认 disabled，utility JSON 任务无需推理）与 `maxTokens`**，provider 拒绝扩展字段
+  4xx 时回退纯 body 重试（沿用 MCP judge 的 response_format 模式）；**② 摘要 `maxTokens: 200`、
+  ingest 原子化 `maxTokens: 4000`**；**③ ingest 块级并发池（`INGEST_CONCURRENCY`，默认 4）**，
+  告别逐块串行；**④ 搜索词法 BM25 与 query embedding 并行化**（`rerankWithSemantic` 接受预计算向量，
+  失败仍降级纯词法）→ 每次语义搜索省 ~300-700ms。已落地未实施（权衡待定）：MCP judge 关 thinking
+  （判别质量需回归）、候选全弱时规则短路、DashScope 国际版端点（需新 key）。本地 106 测试全过 +
+  `deploy.sh` 全量门禁部署，线上验证：auto-summary / search-embed 的 llm_calls 行 took_ms 见新记录。

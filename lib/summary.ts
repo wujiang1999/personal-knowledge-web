@@ -45,7 +45,7 @@ export async function generateSummaryForConcept(conceptId: string): Promise<Summ
       role: "user",
       content: `标题：${title}\n\n正文：\n${body_markdown.slice(0, BODY_WINDOW)}`,
     },
-  ], { meta: { purpose: "auto-summary", userId: owner_id } });
+  ], { meta: { purpose: "auto-summary", userId: owner_id }, maxTokens: 200 });
   const description = typeof data.description === "string" ? data.description.trim().slice(0, SUMMARY_MAX_CHARS) : "";
   if (!description) return { status: "skipped", reason: "LLM 返回空描述" };
 
