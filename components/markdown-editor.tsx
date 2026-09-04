@@ -132,11 +132,13 @@ export function MarkdownEditor({
       doc: valueRef.current,
       parent: hostRef.current,
       extensions: [
+        // Must precede basicSetup: CodeMirror keeps only the FIRST
+        // autocompletion instance, and ours carries the [[ override source.
+        autocompletion({ override: [wikiSource] }),
         basicSetup,
         keymap.of([indentWithTab]),
         EditorView.lineWrapping,
         markdown({ base: markdownLanguage, codeLanguages: languages }),
-        autocompletion({ override: [wikiSource] }),
         themeComp.current.of(dark ? oneDark : []),
         EditorView.theme({
           "&": { backgroundColor: "transparent", height: "100%" },
