@@ -196,3 +196,15 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
   失败仍降级纯词法）→ 每次语义搜索省 ~300-700ms。已落地未实施（权衡待定）：MCP judge 关 thinking
   （判别质量需回归）、候选全弱时规则短路、DashScope 国际版端点（需新 key）。本地 106 测试全过 +
   `deploy.sh` 全量门禁部署，线上验证：auto-summary / search-embed 的 llm_calls 行 took_ms 见新记录。
+- 2026-09-04（深夜，Obsidian 范式第一批，a9c4983）：对照 Obsidian 知识工作流范式落地五项：**① 链接别名
+  `[[标题|显示名]]`**——`parseWikiLinks` 在首个 `|` 拆 target/display，target 保持纯净（下游 title→id、
+  反链 pattern、curate 全部受益），display 仅影响渲染，空别名回退 target；`findBacklinks` 同步支持别名
+  形态（`[[title]]` OR `[[title|` 两个 ILIKE）。**② 未解析链接一键创建**——正文/outgoing 面板里的未解析
+  链接渲染为虚线下划线，点击打开 `/knowledge/new?title=` 预填表单（Obsidian click-to-create）。**③ 详情页
+  「链接到」面板**——出链列表（已创建/未创建状态，同 target 去重、首次出现排序）。**④ 编辑器 `[[` 补全**——
+  标题列表取自 `/api/concepts?limit=200`（30s 客户端缓存、纯前端过滤，零 search-log 污染），裸 `[[` 列最近
+  条目、输入过滤（前缀优先），↑↓/Enter/Esc 键盘流，`|` 别名后缀在补全时保留。**⑤ Ctrl/Cmd+K 快速切换器**
+  （`components/quick-switcher.tsx`，header 挂触发按钮）——标题模糊过滤跳转。全库导出经核查**已存在**
+  （`/api/export/okf` + settings 按钮），未重复建设。本地门禁 108 测试过；线上端到端验证（relay 浏览器）：
+  别名渲染为显示名且指向正确 target、未解析链接 href 带预填 title、链接到面板两行状态正确、
+  `?title=` 预填、`[[强` 前缀排序补全 + Enter 插入、Ctrl+K 打开→过滤→跳转全通过；测试条目与临时 key 已清理。
