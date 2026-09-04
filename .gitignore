@@ -50,3 +50,7 @@ next-env.d.ts
 
 # vercel
 .vercel
+
+# Next.js agent-rules autogenerations (local only)
+/AGENTS.md
+/CLAUDE.md
