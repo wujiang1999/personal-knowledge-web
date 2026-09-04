@@ -126,9 +126,12 @@ export function MarkdownEditor({
           apply: (view, _completion, applyFrom, applyTo) => {
             const aliasIdx = typed.indexOf("|");
             const suffix = aliasIdx === -1 ? "" : typed.slice(aliasIdx);
+            const insert = `${t.title}${suffix}]]`;
             view.dispatch({
-              changes: { from: applyFrom, to: applyTo, insert: `${t.title}${suffix}]]` },
-              selection: { anchor: applyFrom + t.title.length + suffix.length },
+              changes: { from: applyFrom, to: applyTo, insert },
+              // Caret AFTER the closing brackets (Obsidian behavior) so the
+              // next keystrokes never land inside the just-written link.
+              selection: { anchor: applyFrom + insert.length },
             });
           },
         }));
