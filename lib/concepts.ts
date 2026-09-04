@@ -1105,3 +1105,25 @@ export async function findBacklinks(
   );
   return rows;
 }
+/** Current bodies for embed targets (`![[标题]]` transclusion), keyed by
+ * LOWERCASED title; viewer-scoped, missing titles stay absent from the map.
+ * Used by the concept detail page to render embed boxes without extra
+ * per-embed queries. */
+export async function getBodiesByTitles(
+  user: ScopeUser,
+  titles: string[]
+): Promise<Map<string, { id: string; body: string }>> {
+  const uniq = [...new Set(titles.map((t) => t.trim()).filter(Boolean))].slice(0, 50);
+  const map = new Map<string, { id: string; body: string }>();
+  if (uniq.length === 0) return map;
+  const lowered = uniq.map((t) => t.toLowerCase());
+  const { rows } = await query<{ id: string; title: string; body_markdown: string }>(
+    `SELECT c.id, c.title, v.body_markdown
+     FROM concepts c
+     JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
+     WHERE lower(c.title) = ANY($1::text[]) ${user.role === "admin" ? "" : "AND c.owner_id = $2"}`,
+    user.role === "admin" ? [lowered] : [lowered, user.id]
+  );
+  for (const r of rows) map.set(r.title.toLowerCase(), { id: r.id, body: r.body_markdown });
+  return map;
+}

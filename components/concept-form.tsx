@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { BODY_TEMPLATES, type BodyTemplate } from "@/lib/templates";
+import { MarkdownEditor, type EditorTitle } from "@/components/markdown-editor";
 
 export interface ConceptFormInitial {
   id?: string;
@@ -146,95 +147,43 @@ export function ConceptForm({
   function applyTemplate(t: BodyTemplate) {
     setBody((cur) => (cur.trim() ? `${cur.trimEnd()}\n\n${t.body}` : t.body));
     if (typeRef.current && typeRef.current.value === "Note") typeRef.current.value = t.type;
-    bodyRef.current?.focus();
+    editorFocusRef.current?.();
   }
 
-  // ---- [[ autocomplete (Obsidian quick-link pattern) -----------------------
+  // ---- [[ completion + live preview (MarkdownEditor) ------------------------
   // Titles come from GET /api/concepts?limit=200 and are filtered CLIENT-side
-  // (a personal KB is hundreds of rows: zero-latency suggestions, no
-  // search-log pollution). Cache 30s. Bare "[[" lists recent entries; typing
-  // filters; "|" suffix is preserved as an alias on apply.
-  interface TitleItem { id: string; title: string; category: string | null }
+  // by the editor's completion source (a personal KB is hundreds of rows:
+  // zero-latency suggestions, no search-log pollution). Cache 30s, shared by
+  // the editor and the preview.
+  const editorFocusRef = useRef<(() => void) | null>(null);
+  const titlesRef = useRef<{ at: number; items: EditorTitle[] } | null>(null);
   const [body, setBody] = useState(initial?.body ?? "");
-  const titlesRef = useRef<{ at: number; items: TitleItem[] } | null>(null);
-  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
-  const [sug, setSug] = useState<{
-    caret: number; start: number; query: string; items: TitleItem[]; sel: number;
-  } | null>(null);
 
-  function loadTitles(onDone?: (items: TitleItem[]) => void) {
-    fetch("/api/concepts?limit=200")
-      .then((r) => (r.ok ? r.json() : { concepts: [] }))
-      .then((d: { concepts?: { id: string; title: string; category?: string | null }[] }) => {
-        const items: TitleItem[] = (d.concepts ?? []).map((c) => ({
-          id: c.id, title: c.title, category: c.category ?? null,
-        }));
-        titlesRef.current = { at: Date.now(), items };
-        onDone?.(items);
-      })
-      .catch(() => {});
-  }
-
-  function evaluateSuggestion(text: string, caret: number) {
-    const upto = text.slice(0, caret);
-    const m = upto.match(/\[\[([^\[\]\n]*)$/);
-    if (!m) {
-      setSug(null);
-      return;
-    }
-    const query = m[1];
-    const start = caret - query.length; // index right after "[["
-    const filter = (items: TitleItem[]) => {
-      const q = query.slice(0, query.indexOf("|")).trim().toLowerCase();
-      const ranked = items
-        .filter((c) => !q || c.title.toLowerCase().includes(q))
-        .sort((a, b) =>
-          (a.title.toLowerCase().startsWith(q) ? 0 : 1) - (b.title.toLowerCase().startsWith(q) ? 0 : 1) ||
-          a.title.length - b.title.length
-        )
-        .slice(0, 8);
-      setSug(ranked.length ? { caret, start, query, items: ranked, sel: 0 } : null);
-    };
+  const getTitles = useCallback((): Promise<EditorTitle[]> => {
     const cache = titlesRef.current;
-    if (cache && Date.now() - cache.at < 30_000) filter(cache.items);
-    else loadTitles(filter);
-  }
-
-  function applySuggestion(title: string) {
-    if (!sug) return;
-    const ta = bodyRef.current;
-    if (!ta) return;
-    const aliasIdx = sug.query.indexOf("|");
-    const suffix = aliasIdx === -1 ? "" : sug.query.slice(aliasIdx); // keeps "|display"
-    const next = `${body.slice(0, sug.start - 2)}[[${title}${suffix}]]${body.slice(sug.caret)}`;
-    const caret = sug.start + title.length + suffix.length + 2;
-    setBody(next);
-    setSug(null);
-    requestAnimationFrame(() => {
-      ta.focus();
-      ta.setSelectionRange(caret, caret);
+    if (cache && Date.now() - cache.at < 30_000) return Promise.resolve(cache.items);
+    return new Promise<EditorTitle[]>((resolve) => {
+      fetch("/api/concepts?limit=200")
+        .then((r) => (r.ok ? r.json() : { concepts: [] }))
+        .then((d: { concepts?: { id: string; title: string; category?: string | null }[] }) => {
+          const items: EditorTitle[] = (d.concepts ?? []).map((c) => ({
+            id: c.id, title: c.title, category: c.category ?? null,
+          }));
+          titlesRef.current = { at: Date.now(), items };
+          resolve(items);
+        })
+        .catch(() => resolve(cache?.items ?? []));
     });
-  }
+  }, []);
 
-  function onBodyKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (!sug) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setSug({ ...sug, sel: (sug.sel + 1) % sug.items.length });
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setSug({ ...sug, sel: (sug.sel - 1 + sug.items.length) % sug.items.length });
-    } else if (e.key === "Enter" || e.key === "Tab") {
-      e.preventDefault();
-      applySuggestion(sug.items[sug.sel].title);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      setSug(null);
-    }
-  }
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (!body.trim()) {
+      setError("正文不能为空");
+      editorFocusRef.current?.();
+      return;
+    }
     setLoading(true);
     setError("");
     setDuplicate(null);
@@ -406,52 +355,13 @@ export function ConceptForm({
 
       <div>
         <label className={labelCls}>正文（Markdown）*</label>
-        <div className="relative">
-          <textarea
-            ref={bodyRef}
-            name="body"
-            required
-            rows={16}
-            value={body}
-            onChange={(e) => {
-              setBody(e.target.value);
-              evaluateSuggestion(e.target.value, e.target.selectionStart ?? 0);
-            }}
-            onSelect={(e) => evaluateSuggestion(body, e.currentTarget.selectionStart ?? 0)}
-            onKeyDown={onBodyKeyDown}
-            onBlur={() => setTimeout(() => setSug(null), 120)}
-            className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-sm outline-none focus:border-zinc-500 focus:ring-1 focus:ring-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500"
-          />
-          {sug && (
-            <ul className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
-              {sug.items.map((c, i) => (
-                <li key={c.id}>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      applySuggestion(c.title);
-                    }}
-                    onMouseEnter={() => setSug(sug ? { ...sug, sel: i } : sug)}
-                    className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm ${
-                      i === sug.sel ? "bg-zinc-100 dark:bg-zinc-800" : ""
-                    }`}
-                  >
-                    <span className="truncate">{c.title}</span>
-                    {c.category && (
-                      <span className="shrink-0 text-xs text-zinc-400 dark:text-zinc-500">{c.category}</span>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        <MarkdownEditor value={body} onChange={setBody} getTitles={getTitles} focusRef={editorFocusRef} />
         <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
           输入 <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">[[</code>{" "}
           触发条目补全（↑↓ 选择、Enter 确认）；支持{" "}
-          <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">[[条目标题|显示名]]</code>{" "}
-          链接（保存后可双向跳转）。
+          <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">![[条目标题]]</code>{" "}
+          嵌入与 <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">[[标题|显示名]]</code>{" "}
+          别名链接；右上角可切换实时预览。
         </p>
       </div>
 

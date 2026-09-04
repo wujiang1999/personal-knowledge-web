@@ -11,10 +11,24 @@ export interface WikiLinkRef {
   title: string;
   /** Rendered text. Equals the target when no `|alias` is written. */
   display: string;
-  /** Index of the opening `[` in the source text. */
+  /** True for `![[标题]]` embed refs. Embeds are references too: they count
+   * for outgoing-link panels, backlinks and the graph, and render as
+   * transclusion blocks when they sit alone on their line. */
+  embed: boolean;
+  /** Index of the opening `[` in the source text (the `!` is one before). */
   start: number;
   /** Index one past the closing `]`. */
   end: number;
+}
+
+/** Shared alias split: `target` before the first `|`, `display` after (falls
+ * back to the target when the alias is empty). Null when nothing usable. */
+function splitRefInner(inner: string): { title: string; display: string } | null {
+  const bar = inner.indexOf("|");
+  const title = (bar === -1 ? inner : inner.slice(0, bar)).trim();
+  if (!title) return null;
+  const display = bar === -1 ? title : inner.slice(bar + 1).trim() || title;
+  return { title, display };
 }
 
 /** `[[...]]` matcher: no nesting, no line breaks inside, length-capped so a
@@ -28,19 +42,16 @@ const WIKI_LINK_RE = /\[\[([^\[\]\n]{1,200})\]\]/g;
 export function parseWikiLinks(text: string): WikiLinkRef[] {
   const out: WikiLinkRef[] = [];
   for (const m of text.matchAll(WIKI_LINK_RE)) {
-    const inner = m[1];
-    const bar = inner.indexOf("|");
-    const title = (bar === -1 ? inner : inner.slice(0, bar)).trim();
-    if (!title) continue;
-    const display = bar === -1 ? title : inner.slice(bar + 1).trim() || title;
-    out.push({ title, display, start: m.index, end: m.index + m[0].length });
+    const ref = splitRefInner(m[1]);
+    if (!ref) continue;
+    out.push({ ...ref, embed: m.index > 0 && text[m.index - 1] === "!", start: m.index, end: m.index + m[0].length });
   }
   return out;
 }
 
 export type BodySegment =
   | { kind: "text"; text: string }
-  | { kind: "link"; title: string; display: string; targetId: string | null };
+  | { kind: "link"; title: string; display: string; embed: boolean; targetId: string | null };
 
 /** Split a body into text/link segments for rendering. `titleToId` maps
  * lowercased titles of concepts visible to the viewer; links without a match
@@ -63,6 +74,7 @@ export function segmentBodyWithLinks(
       kind: "link",
       title: ref.title,
       display: ref.display,
+      embed: ref.embed,
       targetId: titleToId.get(ref.title.toLowerCase()) ?? null,
     });
     cursor = ref.end;
@@ -73,6 +85,51 @@ export function segmentBodyWithLinks(
   return segments;
 }
 
+export type BodyBlock =
+  | { kind: "markdown"; text: string }
+  | { kind: "embed"; title: string; display: string };
+
+const EMBED_LINE_RE = /^\s*!\[\[([^\[\]\n]{1,200})\]\]\s*$/;
+
+/** Split a body into markdown chunks and BLOCK-LEVEL embeds: a `![[标题]]`
+ * that sits alone on its line (surrounding whitespace only) becomes an
+ * embed block; any other `![[…]]` stays inline markdown (renderers degrade
+ * it to a labeled link). Fence-aware: lines inside ``` / ~~~ fences never
+ * split, so embeds pasted into code samples stay literal. Chunks preserve
+ * the original text losslessly — embed lines are consumed whole. */
+export function splitBodyBlocks(body: string): BodyBlock[] {
+  const blocks: BodyBlock[] = [];
+  let buf: string[] = [];
+  let inFence = false;
+  const flush = () => {
+    if (buf.length) {
+      blocks.push({ kind: "markdown", text: buf.join("\n") });
+      buf = [];
+    }
+  };
+  for (const line of body.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      buf.push(line);
+      continue;
+    }
+    const m = inFence ? undefined : EMBED_LINE_RE.exec(line);
+    if (!m) {
+      buf.push(line);
+      continue;
+    }
+    const ref = splitRefInner(m[1]);
+    if (!ref) {
+      buf.push(line);
+      continue;
+    }
+    flush();
+    blocks.push({ kind: "embed", ...ref });
+  }
+  flush();
+  return blocks;
+}
+
 /** Replace every `[[标题]]` in `body` with a Markdown link whose destination
  * is the `wiki:` scheme + percent-encoded title. Rendering resolves the
  * scheme against a title→id map (components/concept-body.tsx); unresolvable
@@ -80,15 +137,19 @@ export function segmentBodyWithLinks(
  * link syntax is unambiguous; encodeURIComponent strips spaces/parens from
  * the destination so no `<...>` wrapping is needed. Link text backslash-
  * escapes Markdown inline specials so a title like `a*b` cannot start
- * emphasis. */
+ * emphasis. Inline `![[标题]]` embeds degrade to a 📄-labeled link (block
+ * embeds never reach this function — splitBodyBlocks consumes them). */
 export function embedWikiLinks(body: string): string {
   const refs = parseWikiLinks(body);
   if (refs.length === 0) return body;
   let out = "";
   let cursor = 0;
   for (const ref of refs) {
-    out += body.slice(cursor, ref.start);
-    out += `[${ref.display.replace(/([\\`*_[\]])/g, "\\$1")}](wiki:${encodeURIComponent(ref.title)})`;
+    // An embed ref consumes its leading "!"; the label carries the 📄 mark.
+    const from = ref.embed && body[ref.start - 1] === "!" ? ref.start - 1 : ref.start;
+    out += body.slice(cursor, from);
+    const label = (ref.embed ? "📄 " : "") + ref.display;
+    out += `[${label.replace(/([\\`*_[\]])/g, "\\$1")}](wiki:${encodeURIComponent(ref.title)})`;
     cursor = ref.end;
   }
   out += body.slice(cursor);

@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/requireUser";
 import {
   findBacklinks,
   findUnlinkedMentions,
+  getBodiesByTitles,
   getConceptDetail,
   resolveLinkTargets,
 } from "@/lib/concepts";
@@ -30,10 +31,12 @@ export default async function ConceptDetailPage({
   // target collapse to one panel row (first-mention order kept).
   const outgoingRefs = parseWikiLinks(bodyText);
   const uniqueOutgoing = [...new Map(outgoingRefs.map((r) => [r.title, r])).values()];
-  const [titleToId, backlinks, unlinked] = await Promise.all([
+  const embedTitles = outgoingRefs.filter((r) => r.embed).map((r) => r.title);
+  const [titleToId, backlinks, unlinked, embedBodies] = await Promise.all([
     resolveLinkTargets(user, uniqueOutgoing.map((r) => r.title)),
     findBacklinks(user, concept.id, concept.title),
     findUnlinkedMentions(user, concept.id, concept.title),
+    getBodiesByTitles(user, embedTitles),
   ]);
 
   return (
@@ -77,7 +80,7 @@ export default async function ConceptDetailPage({
 
       <section>
         <h2 className="mb-2 font-medium">当前正文（v{concept.current_version}）</h2>
-        <ConceptBody body={bodyText} titleToId={titleToId} />
+        <ConceptBody body={bodyText} titleToId={titleToId} embeds={embedBodies} />
       </section>
 
       <section>

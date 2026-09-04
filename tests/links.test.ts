@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { embedWikiLinks, parseWikiLinks, segmentBodyWithLinks } from "../lib/links";
+import { embedWikiLinks, parseWikiLinks, segmentBodyWithLinks, splitBodyBlocks } from "../lib/links";
 
 describe("parseWikiLinks", () => {
   it("extracts titles in order with positions", () => {
@@ -31,23 +31,23 @@ describe("segmentBodyWithLinks", () => {
     const segs = segmentBodyWithLinks("用 [[RRF 融合]] 合并，但 [[不存在的条目]] 不行", targets);
     expect(segs).toHaveLength(5);
     expect(segs[0]).toEqual({ kind: "text", text: "用 " });
-    expect(segs[1]).toEqual({ kind: "link", title: "RRF 融合", display: "RRF 融合", targetId: "id-rrf" });
+    expect(segs[1]).toEqual({ kind: "link", title: "RRF 融合", display: "RRF 融合", embed: false, targetId: "id-rrf" });
     expect(segs[2]).toEqual({ kind: "text", text: " 合并，但 " });
-    expect(segs[3]).toEqual({ kind: "link", title: "不存在的条目", display: "不存在的条目", targetId: null });
+    expect(segs[3]).toEqual({ kind: "link", title: "不存在的条目", display: "不存在的条目", embed: false, targetId: null });
     expect(segs[4]).toEqual({ kind: "text", text: " 不行" });
   });
 
   it("splits [[target|display]] aliases: pure target, display text", () => {
     const refs = parseWikiLinks("见 [[RRF 融合|RRF]] 与 [[空别名|]]。");
     expect(refs).toEqual([
-      { title: "RRF 融合", display: "RRF", start: 2, end: 16 },
-      { title: "空别名", display: "空别名", start: 19, end: 27 },
+      { title: "RRF 融合", display: "RRF", embed: false, start: 2, end: 16 },
+      { title: "空别名", display: "空别名", embed: false, start: 19, end: 27 },
     ]);
   });
 
   it("segment keeps alias display while resolving by target", () => {
     const segs = segmentBodyWithLinks("用 [[RRF 融合|RRF]] 合并", targets);
-    expect(segs[1]).toEqual({ kind: "link", title: "RRF 融合", display: "RRF", targetId: "id-rrf" });
+    expect(segs[1]).toEqual({ kind: "link", title: "RRF 融合", display: "RRF", embed: false, targetId: "id-rrf" });
   });
   it("round-trips: concatenated segments reproduce the source (incl. aliases)", () => {
     const body = "前缀 [[A]] 中缀 [[B|乙]] 后缀";
@@ -86,5 +86,44 @@ describe("embedWikiLinks", () => {
     expect(embedWikiLinks(body)).toBe(
       "```bash\ndocker compose up -d\n```\n\n见 [混合检索](wiki:%E6%B7%B7%E5%90%88%E6%A3%80%E7%B4%A2)。"
     );
+  });
+});
+
+describe("embed refs (![[标题]])", () => {
+  it("flags bang-prefixed refs as embeds", () => {
+    const refs = parseWikiLinks("见 [[A]] 与 ![[B]]。");
+    expect(refs.map((r) => r.embed)).toEqual([false, true]);
+    expect(refs[1].title).toBe("B");
+  });
+
+  it("inline embeds degrade to labeled links, consuming the bang", () => {
+    expect(embedWikiLinks("行内 ![[A|别名]] 嵌入")).toBe("行内 [📄 别名](wiki:A) 嵌入");
+  });
+});
+
+describe("splitBodyBlocks", () => {
+  it("returns one lossless markdown chunk without embeds", () => {
+    const body = "# 标题\n\n正文段落。";
+    expect(splitBodyBlocks(body)).toEqual([{ kind: "markdown", text: body }]);
+  });
+
+  it("consumes block-level embed lines", () => {
+    const blocks = splitBodyBlocks("前文\n\n![[A]]\n\n后文");
+    expect(blocks).toEqual([
+      { kind: "markdown", text: "前文\n" },
+      { kind: "embed", title: "A", display: "A" },
+      { kind: "markdown", text: "\n后文" },
+    ]);
+  });
+
+  it("keeps inline embeds and fenced embeds as markdown", () => {
+    const body = "行内 ![[A]] 不拆。\n\n```\n![[B]]\n```\n\n![[C|别名]]";
+    const blocks = splitBodyBlocks(body);
+    expect(blocks.filter((b) => b.kind === "embed")).toEqual([
+      { kind: "embed", title: "C", display: "别名" },
+    ]);
+    const md = blocks.find((b) => b.kind === "markdown");
+    expect(md && "text" in md && md.text.includes("![[A]]")).toBe(true);
+    expect(md && "text" in md && md.text.includes("![[B]]")).toBe(true);
   });
 });
