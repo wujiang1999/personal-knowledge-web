@@ -24,7 +24,10 @@ interface BodyProps {
 }
 
 function renderAFor(titleToId: Map<string, string>) {
-  return ({ href, children }: { href?: string; children?: React.ReactNode }) => {
+  // Named declaration (not a bare arrow) so the component has a display
+  // name — react/display-name requires it for components returned from a
+  // factory and passed via react-markdown's `components` prop.
+  function WikiAnchor({ href, children }: { href?: string; children?: React.ReactNode }) {
     if (href?.startsWith("wiki:")) {
       const title = decodeURIComponent(href.slice("wiki:".length));
       const targetId = titleToId.get(title.toLowerCase());
@@ -53,7 +56,8 @@ function renderAFor(titleToId: Map<string, string>) {
         {children}
       </a>
     );
-  };
+  }
+  return WikiAnchor;
 }
 
 // react-markdown's default URL sanitizer strips unknown schemes like
