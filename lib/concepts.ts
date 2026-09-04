@@ -4,6 +4,7 @@ import { deleteAttachmentFile } from "./attachments";
 import type { ScopeUser } from "./requireUser";
 import { conceptRowsForIds, hasSemanticSearch, rerankWithSemantic, semanticCandidates } from "./semantic";
 import { llmEmbed } from "./llm";
+import { BM25_B, BM25_K1, DEPRECATED_FACTOR, tokenizeQuery } from "./bm25";
 
 /** Thrown when a concept lookup by id finds no row (typed 404, not string-match). */
 export class NotFoundError extends Error {}
@@ -419,21 +420,6 @@ export interface SearchResult extends Concept {
   similarity?: number;
 }
 
-/** Cached probe: is the pgroonga extension installed in this database? */
-let pgroongaAvailable: boolean | null = null;
-async function hasPgroonga(): Promise<boolean> {
-  if (pgroongaAvailable === null) {
-    try {
-      const { rows } = await query<{ count: string }>(
-        "SELECT count(*)::text AS count FROM pg_extension WHERE extname = 'pgroonga'"
-      );
-      pgroongaAvailable = Number(rows[0]?.count ?? 0) > 0;
-    } catch {
-      pgroongaAvailable = false;
-    }
-  }
-  return pgroongaAvailable;
-}
 
 // Repeat searches (UI resubmits, MCP agent loops, back-navigation re-renders)
 // hit the same needle within seconds. A small TTL cache turns those into ~0ms.
@@ -462,124 +448,98 @@ export async function searchConcepts(
   if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL) {
     return { results: cached.results, total: cached.total };
   }
-  // Tokenize on whitespace/punctuation. Every token must appear in
-  // title/description/body — AND semantics the raw-needle ILIKE cannot
-  // express — and the score gains a token-coverage term.
-  const tokens = needle.split(/[\s,，。;；:：、|/\\]+/).filter(Boolean);
-  const tokenCount = tokens.length;
 
-  const hasAscii = /[a-z0-9]/i.test(needle);
-  // pg_trgm needs at least 3 characters to form trigrams.
-  const hasTrigrams = needle.length >= 3;
-  const pgroonga = await hasPgroonga();
+  const isAdmin = user.role === "admin";
+  // BM25 terms: lowercase ASCII word runs + CJK bigrams (TokenBigram shape).
+  // The term list travels as ONE array parameter, so the statement text — and
+  // with it the named prepared plan — never varies with term count.
+  const terms = tokenizeQuery(needle);
 
-  // $1 = ownerId, then one LIKE param per token, then full-needle LIKE,
-  // prefix, raw needle, limit; role is appended last for the admin bypass.
-  const params: unknown[] = [user.id];
-  const tokenConds: string[] = [];
-  const coverageTerms: string[] = [];
-  for (const tok of tokens) {
-    params.push(`%${escapeLike(tok)}%`);
-    const p = `$${params.length}`;
-    tokenConds.push(`(c.title ILIKE ${p} OR c.description ILIKE ${p} OR v.body_markdown ILIKE ${p})`);
-    coverageTerms.push(
-      `CASE WHEN c.title ILIKE ${p} OR c.description ILIKE ${p} OR v.body_markdown ILIKE ${p} THEN 1 ELSE 0 END`
-    );
-  }
-  params.push(`%${escapeLike(needle)}%`);
-  const likeParam = `$${params.length}`;
-  params.push(`${escapeLike(needle)}%`);
-  const prefixParam = `$${params.length}`;
-  params.push(needle);
-  const qParam = `$${params.length}`;
-  params.push(limit);
-  const limitParam = `$${params.length}`;
-  params.push(offset);
-  const offsetParam = `$${params.length}`;
-  let ownerClause = "c.owner_id = $1";
-  if (user.role === "admin") {
-    params.push(user.role);
-    ownerClause = `($${params.length}::text = 'admin' OR c.owner_id = $1)`;
-  }
-
-  // WHERE branches: strict token AND is the primary path; FTS (ASCII-only),
-  // trgm fuzzy (>=3 chars), and PGroonga (when installed) add recall.
-  const branches: string[] = [`(${tokenConds.join(" AND ")})`];
-  if (hasAscii) {
-    branches.push(`v.content_tsv @@ websearch_to_tsquery('simple', ${qParam})`);
-  }
-  if (hasTrigrams) {
-    // `%` and `%>` (query on the right) drive the GIN trgm index; the
-    // per-session thresholds are lowered below so partial matches survive.
-    branches.push(`c.title % ${qParam} OR v.body_markdown % ${qParam} OR v.body_markdown %> ${qParam}`);
-  }
-  if (pgroonga) {
-    // `&@` = all keywords with a CJK-aware bigram tokenizer; no query
-    // syntax, so arbitrary user input cannot raise a parse error.
-    branches.push(`v.body_markdown &@ ${qParam} OR c.title &@ ${qParam} OR COALESCE(c.description, '') &@ ${qParam}`);
-  }
+  // $1 = ownerId, $2 = terms[], $3 = needle (preview anchor), $4 = limit,
+  // $5 = offset; the role check is appended last for the admin bypass.
+  const params: unknown[] = [user.id, terms, needle, limit, offset];
+  const ownerClause = isAdmin
+    ? `($${((params.push(user.role), params.length))}::text = 'admin' OR c.owner_id = $1)`
+    : "c.owner_id = $1";
 
   const sql = `
-    SELECT
-      c.id, c.type, c.title, c.description, c.status, c.tags,
-      c.current_version, c.created_at, c.updated_at,
-      c.owner_id, ou.username AS owner_username,
-      (SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count,
-      -- Total match count for pagination (evaluated over the full window).
-      count(*) over() AS total_count,
-      -- Search results only ever render a ~2-line preview (UI) or feed a
-      -- truncating client (MCP bodyPreview); shipping full markdown grew the
-      -- payload 5-10x. Return a match-anchored window capped at 500 chars —
-      -- falls back to the head of the body when the raw needle itself does
-      -- not appear (token-only matches).
-      substring(
-        v.body_markdown from greatest(1, position(lower(${qParam}) in lower(v.body_markdown)) - 120) for 500
-      ) AS body_markdown,
-      (
-        (CASE WHEN c.title = ${qParam} THEN 100 ELSE 0 END)
-        + (CASE WHEN c.title ILIKE ${prefixParam} THEN 40 ELSE 0 END)
-        + (CASE WHEN c.title ILIKE ${likeParam} THEN 30 ELSE 0 END)
-        + (CASE WHEN v.body_markdown ILIKE ${likeParam} THEN 15 ELSE 0 END)
-        + (CASE WHEN c.description ILIKE ${likeParam} THEN 8 ELSE 0 END)
-        + (${coverageTerms.join(" + ")}) * 20.0 / ${tokenCount}
-        -- 失效内容降权(§3.3.3.2):废弃条目仍可被搜到但不与有效条目竞争前排。
-        + (CASE WHEN c.status = 'deprecated' THEN -150 ELSE 0 END)
-        ${hasTrigrams ? `+ (similarity(c.title, ${qParam}) * 50)
-        + (word_similarity(${qParam}, v.body_markdown) * 20)
-        + (similarity(COALESCE(c.description, ''), ${qParam}) * 12)` : ""}
-        				${hasAscii ? `+ COALESCE(ts_rank('{0.1,0.2,0.4,1.0}'::real[], v.content_tsv, websearch_to_tsquery('simple', ${qParam})), 0)` : ""}
-        ${pgroonga ? `+ COALESCE(pgroonga_score(v), 0) * 15
-        + COALESCE(pgroonga_score(c), 0) * 30` : ""}
-      ) AS score
-    FROM concepts c
-    LEFT JOIN users ou ON ou.id = c.owner_id
-    JOIN concept_versions v
-      ON v.concept_id = c.id AND v.version_number = c.current_version
-    WHERE ${ownerClause} AND (${branches.join(" OR ")})
-    ORDER BY score DESC, c.updated_at DESC
-    LIMIT ${limitParam}
-    OFFSET ${offsetParam}
+    WITH corpus AS MATERIALIZED (
+      SELECT c.id, c.type, c.title, c.description, c.status, c.tags,
+             c.current_version, c.created_at, c.updated_at, c.owner_id,
+             ou.username AS owner_username,
+             (SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count,
+             v.body_markdown,
+             (char_length(c.title) + char_length(COALESCE(c.description, ''))
+               + char_length(v.body_markdown))::real AS doc_len
+      FROM concepts c
+      LEFT JOIN users ou ON ou.id = c.owner_id
+      JOIN concept_versions v
+        ON v.concept_id = c.id AND v.version_number = c.current_version
+      WHERE ${ownerClause}
+    ),
+    -- Corpus-wide document frequency per term, using the same lower()ed
+    -- substring definition as tf below, so idf and tf agree.
+    df AS (
+      SELECT t.term, count(*)::real AS df
+      FROM corpus, unnest($2::text[]) AS t(term)
+      WHERE position(t.term IN lower(corpus.title)) > 0
+         OR position(t.term IN lower(COALESCE(corpus.description, ''))) > 0
+         OR position(t.term IN lower(corpus.body_markdown)) > 0
+      GROUP BY t.term
+    ),
+    scored AS (
+      SELECT c.*,
+        (SELECT COALESCE(sum(
+           ln(1 + (s.n - d.df + 0.5) / (d.df + 0.5))
+           * tfx.tf * (${BM25_K1} + 1)
+           / (tfx.tf + ${BM25_K1} * (1 - ${BM25_B} + ${BM25_B} * c.doc_len / s.avgdl))
+         ), 0)
+         FROM unnest($2::text[]) AS t(term)
+         JOIN df d ON d.term = t.term
+         CROSS JOIN LATERAL (
+           SELECT GREATEST(
+             (char_length(c.title) - char_length(replace(lower(c.title), t.term, '')))
+           + (char_length(COALESCE(c.description, ''))
+               - char_length(replace(lower(COALESCE(c.description, '')), t.term, '')))
+           + (char_length(c.body_markdown) - char_length(replace(lower(c.body_markdown), t.term, '')))
+           , 0)::real / GREATEST(char_length(t.term), 1) AS tf
+         ) tfx
+         CROSS JOIN (SELECT count(*)::real AS n, COALESCE(avg(doc_len), 1)::real AS avgdl FROM corpus) s
+        ) AS bm25
+      FROM corpus c
+    )
+    SELECT id, type, title, description, status, tags, current_version, created_at, updated_at,
+           owner_id, owner_username, attachment_count,
+           -- Search results only ever render a ~2-line preview (UI) or feed a
+           -- truncating client (MCP bodyPreview); shipping full markdown grew
+           -- the payload 5-10x. Return a match-anchored window capped at 500
+           -- chars — falls back to the head of the body when the raw needle
+           -- itself does not appear (term-only matches).
+           substring(
+             body_markdown from greatest(1, position(lower($3) in lower(body_markdown)) - 120) for 500
+           ) AS body_markdown,
+           -- Total match count for pagination (evaluated over the full window).
+           count(*) over () AS total_count,
+           -- 失效内容降权(§3.3.3.2): deprecated stays findable but is scaled
+           -- out of the front rows; ordering and emitted score agree.
+           round((bm25 * (CASE WHEN status = 'deprecated' THEN ${DEPRECATED_FACTOR} ELSE 1 END))::numeric, 2)::float8 AS score
+    FROM scored
+    WHERE bm25 > 0
+    ORDER BY score DESC, updated_at DESC
+    LIMIT $4 OFFSET $5
   `;
 
-  // SET LOCAL keeps the thresholds session-scoped: the pooled connection is
-  // returned clean after COMMIT/ROLLBACK.
+  // A named statement is parsed and planned ONCE per pooled connection;
+  // repeat executions skip parse+plan entirely (the multi-engine SQL used to
+  // cost ~65ms planning per cold search). The text is deterministic per
+  // scope shape; connections are replaced on deploy, which invalidates old
+  // prepared statements naturally.
   const client = await getPool().connect();
   let lexicalResults: SearchResult[];
   let total: number;
   try {
     await client.query("BEGIN");
-    if (hasTrigrams) {
-      await client.query("SET LOCAL pg_trgm.similarity_threshold = 0.1");
-      await client.query("SET LOCAL pg_trgm.word_similarity_threshold = 0.4");
-    }
-    // A named statement is parsed and planned ONCE per pooled connection;
-    // repeat executions skip parse+plan entirely. Measured on this schema:
-    // planning the multi-engine SQL costs ~65ms cold vs ~0.7ms execution, so
-    // unnamed queries re-paid that on every search after a cold connect.
-    // The text is deterministic per (engine flags, token count), so the name
-    // cannot collide with different SQL. Connections are replaced on deploy,
-    // which naturally invalidates old prepared statements.
-    const stmtName = `search_v2_${hasAscii ? 1 : 0}${hasTrigrams ? 1 : 0}${pgroonga ? 1 : 0}_${tokenCount}`;
+    const stmtName = `search_bm25_v1${isAdmin ? "_admin" : "_user"}`;
     const { rows } = await client.query<SearchResult & { total_count: string }>({ name: stmtName, text: sql, values: params as never[] });
     await client.query("COMMIT");
     // count(*) over() rides on the rows; an offset past the end has no rows
@@ -594,6 +554,21 @@ export async function searchConcepts(
     throw err;
   } finally {
     client.release();
+  }
+
+  // Typo tolerance: exact-term BM25 misses near-miss strings ("数所库" vs
+  // "数据库" share no bigram); a trigram pass over the raw needle surfaces
+  // those. Page-1-only — this degenerate window has no pagination count.
+  if (lexicalResults.length === 0 && needle.length >= 3) {
+    try {
+      lexicalResults = await searchTrgmFuzzy(user, needle, limit);
+      total = lexicalResults.length;
+    } catch (err) {
+      console.error(
+        "[search] trgm fallback failed:",
+        err instanceof Error ? err.message : err
+      );
+    }
   }
 
   // Semantic recall expansion (pgvector, entirely optional), first page only
@@ -636,12 +611,78 @@ export async function searchConcepts(
     }
   }
 
+  // 去重后的 top-k: every path above already yields unique ids (one corpus
+  // row per concept; RRF keys by id) — enforce it regardless of path so the
+  // returned contract is always one row per concept, fused order preserved.
+  const seen = new Set<string>();
+  const deduped: SearchResult[] = [];
+  for (const r of results) {
+    if (seen.has(r.id)) continue;
+    seen.add(r.id);
+    deduped.push(r);
+  }
+  results = deduped;
+
   if (searchCache.size >= SEARCH_CACHE_MAX) {
     const oldest = searchCache.keys().next().value;
     if (oldest !== undefined) searchCache.delete(oldest);
   }
   searchCache.set(cacheKey, { at: Date.now(), results, total: totalOut });
   return { results, total: totalOut };
+}
+
+/** Trigram fuzzy fallback for the empty BM25 window (typos, near-miss
+ * strings). pg_trgm needs >=3 chars to form trigrams; callers gate on that.
+ * Scores are similarity-weighted heuristics, deprecated entries scaled down
+ * by the same factor as the BM25 path. */
+async function searchTrgmFuzzy(
+  user: ScopeUser,
+  needle: string,
+  limit: number
+): Promise<SearchResult[]> {
+  // $1 = ownerId, $2 = needle, $3 = limit; role appended last for admin.
+  const params: unknown[] = [user.id, needle, limit];
+  const ownerClause = user.role === "admin"
+    ? `($${((params.push(user.role), params.length))}::text = 'admin' OR c.owner_id = $1)`
+    : "c.owner_id = $1";
+  const sql = `
+    SELECT c.id, c.type, c.title, c.description, c.status, c.tags,
+           c.current_version, c.created_at, c.updated_at,
+           c.owner_id, ou.username AS owner_username,
+           (SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count,
+           substring(
+             v.body_markdown from greatest(1, position(lower($2) in lower(v.body_markdown)) - 120) for 500
+           ) AS body_markdown,
+           (
+             (similarity(c.title, $2) * 50)
+             + (word_similarity($2, v.body_markdown) * 20)
+             + (similarity(COALESCE(c.description, ''), $2) * 12)
+           ) * (CASE WHEN c.status = 'deprecated' THEN ${DEPRECATED_FACTOR} ELSE 1 END)::float8 AS score
+    FROM concepts c
+    LEFT JOIN users ou ON ou.id = c.owner_id
+    JOIN concept_versions v
+      ON v.concept_id = c.id AND v.version_number = c.current_version
+    WHERE ${ownerClause}
+      AND (c.title % $2 OR v.body_markdown % $2 OR v.body_markdown %> $2)
+    ORDER BY score DESC, c.updated_at DESC
+    LIMIT $3
+  `;
+  // SET LOCAL keeps the trgm thresholds session-scoped: the pooled
+  // connection is returned clean after COMMIT/ROLLBACK.
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL pg_trgm.similarity_threshold = 0.1");
+    await client.query("SET LOCAL pg_trgm.word_similarity_threshold = 0.4");
+    const { rows } = await client.query<SearchResult>({ name: "search_trgm_v1", text: sql, values: params as never[] });
+    await client.query("COMMIT");
+    return rows;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function createConcept(input: ConceptInput, user: { id: string; username: string; role: "user" | "admin" }): Promise<string> {

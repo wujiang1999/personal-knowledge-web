@@ -85,7 +85,7 @@ async function main() {
     try {
       const { results } = await searchConcepts({ id: owner.id, role: owner.role }, c.title, 5);
       const best = results[0];
-      if (best && (best.score >= 60 || best.title === c.title)) {
+      if (best && (best.score >= 25 || best.title === c.title)) {
         dupes.push({ title: c.title, match: best.title, score: best.score });
         deduped = true;
       }

@@ -12,7 +12,7 @@
 | UI | Tailwind CSS |
 | 身份认证 | 自定义用户名 + 密码（bcrypt 哈希，JWT httpOnly Cookie 会话） |
 | 数据库 | 自建 PostgreSQL 16（部署在腾讯云服务器，与应用同机） |
-| 全文检索 | PostgreSQL PGroonga + `tsvector` / `pg_trgm` 混合检索（CJK-aware） |
+| 检索 | BM25（ASCII 词 + CJK bigram 分词，PostgreSQL 原生计算）+ pgvector 语义召回 RRF 融合；pg_trgm 模糊兜底 |
 | OKF 导出 | 自研 OKF v0.2 Exporter，输出 Markdown + YAML frontmatter，打包 ZIP |
 
 ## 已实现功能（MVP）
@@ -20,7 +20,7 @@
 - 登录 / 登出 / 修改密码（默认账号 `admin`）
 - 知识条目 CRUD：新建、查看、编辑（**每次保存生成不可变新版本**）
 - 版本历史与内容哈希（SHA-256）追溯
-- 全文搜索（标题 / 正文 / 描述，中文与英文、代码关键词均可命中）
+- 混合检索（标题 / 正文 / 描述）：BM25 词法评分与 embedding 语义召回 RRF 融合，返回去重 top-k；中文与英文、代码关键词均可命中
 - 原始来源保留（每次录入的原始输入留存，用于可追溯与去重）
 - OKF v0.2 Bundle 导出（`.okf/index.md`、`log.md`、按 type 分目录的概念 Markdown，ZIP 下载）
 - 双向引用：正文中 `[[条目标题]]` 渲染为可跳转链接，详情页附「被引用」反向链接面板
@@ -190,7 +190,7 @@ sudo systemctl list-timers | grep backup                      # 查看下次备�
 
 ## 后续阶段（方案文档 P1–P5）
 
-- pgvector 向量检索 + 混合检索（RRF）——代码就绪，待配置 embedding 端点（见 DEPLOYMENT.md）
+- ~~pgvector 向量检索 + 混合检索（RRF）~~ 已上线：embedding 端点已配置（见 DEPLOYMENT.md），检索为 BM25 + 语义 RRF 融合（2026-09-04 起）
 - ~~注入流程（Markdown/PDF/DOCX/URL）、LLM 知识原子化~~ Markdown 已产品化：`npm run ingest`（含 §3.3.5 上下文锚定分块）
 - ~~近似去重、冲突审核~~ 部分落地：写入时精确查重（409）+ `npm run curate` 整理报告；冲突审核/Claim 抽取待做
 - OKF 同步到 Private Git 仓库
