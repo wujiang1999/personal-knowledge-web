@@ -498,7 +498,7 @@ export async function searchConcepts(
 
   const sql = `
     WITH corpus AS MATERIALIZED (
-      SELECT c.id, c.type, c.title, c.description, c.status, c.tags,
+      SELECT c.id, c.type, c.title, c.description, c.category, c.status, c.tags,
              c.current_version, c.created_at, c.updated_at, c.owner_id,
              ou.username AS owner_username,
              (SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count,
@@ -542,7 +542,7 @@ export async function searchConcepts(
         ) AS bm25
       FROM corpus c
     )
-    SELECT id, type, title, description, status, tags, current_version, created_at, updated_at,
+    SELECT id, type, title, description, category, status, tags, current_version, created_at, updated_at,
            owner_id, owner_username, attachment_count,
            -- Search results only ever render a ~2-line preview (UI) or feed a
            -- truncating client (MCP bodyPreview); shipping full markdown grew
@@ -588,7 +588,7 @@ export async function searchConcepts(
       const { rows } = await client.query<SearchResult & { total_count: string }>({
         name: stmtName,
         text: `
-          SELECT c.id, c.type, c.title, c.description, c.status, c.tags,
+          SELECT c.id, c.type, c.title, c.description, c.category, c.status, c.tags,
                  c.current_version, c.created_at, c.updated_at, c.owner_id,
                  ou.username AS owner_username,
                  (SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count,
