@@ -163,12 +163,9 @@ CREATE INDEX IF NOT EXISTS idx_search_logs_time ON search_logs (created_at DESC)
 CREATE INDEX IF NOT EXISTS idx_search_logs_user_time ON search_logs (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_time ON llm_calls (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_user_time ON llm_calls (user_id, created_at DESC);
--- Added by db/migrations/0015: recycle-bin partial indexes (hot paths only
--- scan live rows; the trash listing scans its own small index).
-CREATE INDEX IF NOT EXISTS idx_concepts_alive_owner_updated
-  ON concepts (owner_id, updated_at DESC) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_concepts_trash
-  ON concepts (owner_id, deleted_at DESC) WHERE deleted_at IS NOT NULL;
+-- Recycle-bin partial indexes are created by db/migrations/0015 only — like
+-- idx_sources_hash_concept (0012), they reference a migration-added column
+-- (deleted_at) and would fail here on databases that haven't run 0015 yet.
 
 -- -------------------------------
 -- tsvector maintenance trigger

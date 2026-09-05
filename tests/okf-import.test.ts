@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { classifyImport, isConceptFile, parseOkfMarkdown, stripExportHeading, type ImportExisting } from "../lib/okf-import";
 
-const md = (title: string, body: string, extra = "") =>
-  `---\ntype: Note\ntitle: "${title}"\nstatus: stable\n${extra}---\n\n# ${title}\n\n${body}\n`;
-
 const existing = (id: string, title: string, hash: string): ImportExisting => ({ id, title, contentHash: hash });
 
 describe("isConceptFile", () => {
@@ -64,28 +61,28 @@ describe("parseOkfMarkdown", () => {
 });
 
 describe("classifyImport", () => {
-  const doc = (title: string, bodyHash: string) =>
+  const doc = (title: string) =>
     ({ title, path: "x.md", type: "Note", description: null, category: null, tags: [], status: "stable", body: "b" }) as Parameters<
       typeof classifyImport
     >[0];
 
   it("byte-identical content duplicates even under a different title", () => {
-    const d = classifyImport(doc("新标题", "h1"), "h1", [existing("id1", "旧标题", "h1")]);
+    const d = classifyImport(doc("新标题"), "h1", [existing("id1", "旧标题", "h1")]);
     expect(d.action).toBe("duplicate");
     expect((d as { existingId: string }).existingId).toBe("id1");
   });
 
   it("same title with different content is a conflict, never an overwrite", () => {
-    const d = classifyImport(doc("同名", "h2"), "h2", [existing("id1", "同名", "h1")]);
+    const d = classifyImport(doc("同名"), "h2", [existing("id1", "同名", "h1")]);
     expect(d.action).toBe("conflict");
   });
 
   it("title comparison is case-insensitive", () => {
-    const d = classifyImport(doc("API 设计", "h2"), "h2", [existing("id1", "api 设计", "h1")]);
+    const d = classifyImport(doc("API 设计"), "h2", [existing("id1", "api 设计", "h1")]);
     expect(d.action).toBe("conflict");
   });
 
   it("unknown title and hash creates", () => {
-    expect(classifyImport(doc("新", "h9"), "h9", [existing("id1", "旧", "h1")]).action).toBe("create");
+    expect(classifyImport(doc("新"), "h9", [existing("id1", "旧", "h1")]).action).toBe("create");
   });
 });
