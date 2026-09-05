@@ -38,7 +38,9 @@ async function main() {
   await ensureSemanticSchema();
   await ensureEmbeddingDimension(cfg.dimensions);
 
-  const BATCH = 16;
+  // 批量上限受 EMBED_TIMEOUT_MS(30s) 约束：一次请求最多 ~BATCH×6K 字符，
+  // qwen3.7-text-embedding-flash 实测 16 条会超时，4 条稳定（2026-09-05）。
+  const BATCH = 4;
   let done = 0;
   for (;;) {
     const { rows } = await query<{
