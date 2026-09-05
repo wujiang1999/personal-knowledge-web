@@ -53,7 +53,7 @@ async function main() {
        FROM concepts c
        JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
        LEFT JOIN concept_embeddings e ON e.concept_id = c.id AND e.model = $1
-       WHERE e.concept_id IS NULL OR e.content_hash IS DISTINCT FROM v.content_hash
+       WHERE c.deleted_at IS NULL AND (e.concept_id IS NULL OR e.content_hash IS DISTINCT FROM v.content_hash)
        LIMIT ${BATCH}`,
       [cfg.model]
     );

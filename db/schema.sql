@@ -43,7 +43,11 @@ CREATE TABLE IF NOT EXISTS concepts (
   tags            text[] NOT NULL DEFAULT '{}',
   current_version integer NOT NULL DEFAULT 1,
   created_at      timestamptz NOT NULL DEFAULT now(),
-  updated_at      timestamptz NOT NULL DEFAULT now()
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+  -- 回收站（软删除）：NULL = 在库；非 NULL = 已删除，仅回收站可见/可恢复。
+  -- 默认可见面（列表/搜索/图谱/导出/链接网络）一律过滤 deleted_at IS NULL，
+  -- 只有回收站中的「彻底删除」才真正 CASCADE 清除。
+  deleted_at      timestamptz
 );
 
 -- -------------------------------
@@ -159,6 +163,12 @@ CREATE INDEX IF NOT EXISTS idx_search_logs_time ON search_logs (created_at DESC)
 CREATE INDEX IF NOT EXISTS idx_search_logs_user_time ON search_logs (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_time ON llm_calls (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_user_time ON llm_calls (user_id, created_at DESC);
+-- Added by db/migrations/0015: recycle-bin partial indexes (hot paths only
+-- scan live rows; the trash listing scans its own small index).
+CREATE INDEX IF NOT EXISTS idx_concepts_alive_owner_updated
+  ON concepts (owner_id, updated_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_concepts_trash
+  ON concepts (owner_id, deleted_at DESC) WHERE deleted_at IS NOT NULL;
 
 -- -------------------------------
 -- tsvector maintenance trigger

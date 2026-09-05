@@ -28,7 +28,7 @@ export async function generateSummaryForConcept(conceptId: string): Promise<Summ
     `SELECT c.owner_id, c.title, c.description, v.body_markdown
      FROM concepts c
      JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
-     WHERE c.id = $1`,
+     WHERE c.id = $1 AND c.deleted_at IS NULL`,
     [conceptId]
   );
   if (cur.rows.length === 0) return { status: "skipped", reason: "concept not found" };

@@ -37,6 +37,9 @@ export interface Concept {
   current_version: number;
   created_at: string;
   updated_at: string;
+  /** Soft-delete marker (回收站). Live reads across lib filter this to NULL;
+   * only the trash surface and the detail page (restore banner) see a value. */
+  deleted_at?: string | null;
   /** Populated on list/detail/search reads; lets an admin tell whose row it is. */
   owner_id?: string;
   owner_username?: string;
@@ -103,7 +106,7 @@ export async function listConcepts(opts: {
   offset?: number;
 }): Promise<Concept[]> {
   const params: unknown[] = [];
-  const where: string[] = [];
+  const where: string[] = ["c.deleted_at IS NULL"];
   // Admin accounts transcend owner scoping: no owner filter at all.
   if (opts.user.role !== "admin") {
     params.push(opts.user.id);
@@ -509,7 +512,7 @@ export async function searchConcepts(
       LEFT JOIN users ou ON ou.id = c.owner_id
       JOIN concept_versions v
         ON v.concept_id = c.id AND v.version_number = c.current_version
-      WHERE ${ownerClause}${filterSql}
+      WHERE c.deleted_at IS NULL AND ${ownerClause}${filterSql}
     ),
     -- Corpus-wide document frequency per term, using the same lower()ed
     -- substring definition as tf below, so idf and tf agree.
@@ -599,7 +602,7 @@ export async function searchConcepts(
           LEFT JOIN users ou ON ou.id = c.owner_id
           JOIN concept_versions v
             ON v.concept_id = c.id AND v.version_number = c.current_version
-          WHERE ${fOwner}${fWhere}
+          WHERE c.deleted_at IS NULL AND ${fOwner}${fWhere}
           ORDER BY c.updated_at DESC
           LIMIT $2 OFFSET $3
         `,
@@ -760,7 +763,8 @@ async function searchTrgmFuzzy(
     LEFT JOIN users ou ON ou.id = c.owner_id
     JOIN concept_versions v
       ON v.concept_id = c.id AND v.version_number = c.current_version
-    WHERE ${ownerClause}
+    WHERE c.deleted_at IS NULL
+      AND ${ownerClause}
       AND (c.title % $2 OR v.body_markdown % $2 OR v.body_markdown %> $2)
     ORDER BY score DESC, c.updated_at DESC
     LIMIT $3
@@ -798,10 +802,12 @@ export async function createConcept(input: ConceptInput, user: { id: string; use
     await client.query("BEGIN");
     // Exact-body dedup within the caller's scope: a concept whose current
     // version already hashes identically wins; the create fails with 409.
+    // Trashed concepts don't count — restoring them is the intended path, but
+    // re-creating the content must also be possible once they're trashed.
     const dupBody = await client.query(
       `SELECT c.id, c.title FROM concepts c
        JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
-       WHERE v.content_hash = $1 ${user.role === "admin" ? "" : "AND c.owner_id = $2"} LIMIT 1`,
+       WHERE v.content_hash = $1 AND c.deleted_at IS NULL ${user.role === "admin" ? "" : "AND c.owner_id = $2"} LIMIT 1`,
       user.role === "admin" ? [contentHash] : [contentHash, user.id]
     );
     if (dupBody.rows.length > 0) {
@@ -912,20 +918,121 @@ export async function addConceptVersion(
   }
 }
 
-export async function deleteConcept(id: string, user: ScopeUser): Promise<boolean> {
+export async function restoreConceptVersion(
+  id: string,
+  versionNumber: number,
+  user: ScopeUser,
+  username: string
+): Promise<SaveResult> {
+  // Version rows are immutable, so "rollback" creates a NEW version from the
+  // historical snapshot — nothing is rewritten, and the rollback itself is
+  // undoable by rolling back again. Metadata comes from the old version's
+  // snapshot, matching what the detail page showed at that version.
+  const detail = await getConceptDetail(id, user);
+  if (!detail) throw new NotFoundError("Concept not found");
+  const v = detail.versions.find((row) => row.version_number === versionNumber);
+  if (!v) throw new NotFoundError("Version not found");
+  return addConceptVersion(
+    id,
+    {
+      type: v.type ?? detail.type,
+      title: v.title ?? detail.title,
+      description: v.description ?? undefined,
+      category: v.category ?? undefined,
+      tags: v.tags,
+      status: v.status ?? undefined,
+      body: v.body_markdown,
+    },
+    username
+  );
+}
+
+export type TrashItem = Concept & { deleted_at: string };
+
+/** Recycle bin listing: soft-deleted concepts only, newest deletion first. */
+export async function listTrash(user: ScopeUser, limit = 100, offset = 0): Promise<TrashItem[]> {
+  const params: unknown[] = [];
+  let sql =
+    "SELECT c.*, ou.username AS owner_username, " +
+    "(SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count " +
+    "FROM concepts c LEFT JOIN users ou ON ou.id = c.owner_id";
+  const where: string[] = ["c.deleted_at IS NOT NULL"];
+  if (user.role !== "admin") {
+    params.push(user.id);
+    where.push(`c.owner_id = $${params.length}`);
+  }
+  sql += " WHERE " + where.join(" AND ") + " ORDER BY c.deleted_at DESC";
+  params.push(Math.min(Math.max(limit, 1), 200));
+  sql += ` LIMIT $${params.length}`;
+  if (offset) {
+    params.push(offset);
+    sql += ` OFFSET $${params.length}`;
+  }
+  const { rows } = await query<TrashItem>(sql, params);
+  return rows;
+}
+
+/** Soft delete: mark deleted_at; versions, attachments and sources all stay.
+ * Every live read path filters these rows out, so the item vanishes from
+ * lists/search/graph/export while remaining restorable. */
+export async function trashConcept(id: string, user: ScopeUser): Promise<boolean> {
+  const { rows } =
+    user.role === "admin"
+      ? await query<{ id: string }>(
+          "UPDATE concepts SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL RETURNING id",
+          [id]
+        )
+      : await query<{ id: string }>(
+          "UPDATE concepts SET deleted_at = now() WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL RETURNING id",
+          [id, user.id]
+        );
+  if (rows.length > 0) invalidateSearchCache();
+  return rows.length > 0;
+}
+
+/** Undo a soft delete. */
+export async function restoreConcept(id: string, user: ScopeUser): Promise<boolean> {
+  const { rows } =
+    user.role === "admin"
+      ? await query<{ id: string }>(
+          "UPDATE concepts SET deleted_at = NULL WHERE id = $1 AND deleted_at IS NOT NULL RETURNING id",
+          [id]
+        )
+      : await query<{ id: string }>(
+          "UPDATE concepts SET deleted_at = NULL WHERE id = $1 AND owner_id = $2 AND deleted_at IS NOT NULL RETURNING id",
+          [id, user.id]
+        );
+  if (rows.length > 0) invalidateSearchCache();
+  return rows.length > 0;
+}
+
+export type PurgeResult = { ok: true } | { ok: false; reason: "not-found" | "not-trashed" };
+
+/** Hard delete (原删除路径): only allowed on already-trashed concepts, so real
+ * destruction is always a second, explicit step after the soft delete. CASCADE
+ * wipes versions/attachments/embeddings; sources survive as audit rows. */
+export async function purgeConcept(id: string, user: ScopeUser): Promise<PurgeResult> {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
     // Ownership check inside the same transaction that deletes (no TOCTOU),
     // and collect attachment disk keys before the CASCADE wipes the rows.
-    // Admin accounts may delete any user's concept.
+    // Admin accounts may purge any user's trashed concept.
     const owned =
       user.role === "admin"
-        ? await client.query("SELECT 1 FROM concepts WHERE id = $1", [id])
-        : await client.query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [id, user.id]);
+        ? await client.query("SELECT 1 FROM concepts WHERE id = $1 AND deleted_at IS NOT NULL", [id])
+        : await client.query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2 AND deleted_at IS NOT NULL", [
+            id,
+            user.id,
+          ]);
     if (owned.rowCount === 0) {
       await client.query("ROLLBACK");
-      return false;
+      // Distinguish "never existed / other owner" from "still live" for the API.
+      const any =
+        user.role === "admin"
+          ? await client.query("SELECT 1 FROM concepts WHERE id = $1", [id])
+          : await client.query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [id, user.id]);
+      return { ok: false, reason: any.rowCount === 0 ? "not-found" : "not-trashed" };
     }
     const atts = await client.query<{ storage_key: string }>(
       "SELECT storage_key FROM attachments WHERE concept_id = $1",
@@ -944,14 +1051,26 @@ export async function deleteConcept(id: string, user: ScopeUser): Promise<boolea
       for (const a of atts.rows) {
         await deleteAttachmentFile(a.storage_key);
       }
+      return { ok: true };
     }
-    return deleted;
+    return { ok: false, reason: "not-found" };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
   } finally {
     client.release();
   }
+}
+
+/** Empty the caller's recycle bin (admin: everyone's). Returns the count. */
+export async function emptyTrash(user: ScopeUser): Promise<number> {
+  const items = await listTrash(user, 200, 0);
+  let purged = 0;
+  for (const item of items) {
+    const res = await purgeConcept(item.id, user);
+    if (res.ok) purged++;
+  }
+  return purged;
 }
 
 export interface Source {
@@ -1023,7 +1142,7 @@ export async function resolveLinkTargets(
   const lowered = uniq.map((t) => t.toLowerCase());
   const { rows } = await query<{ id: string; title: string }>(
     `SELECT c.id, c.title FROM concepts c
-     WHERE lower(c.title) = ANY($1::text[]) ${user.role === "admin" ? "" : "AND c.owner_id = $2"}`,
+     WHERE c.deleted_at IS NULL AND lower(c.title) = ANY($1::text[]) ${user.role === "admin" ? "" : "AND c.owner_id = $2"}`,
     user.role === "admin" ? [lowered] : [lowered, user.id]
   );
   for (const r of rows) {
@@ -1051,6 +1170,7 @@ export async function findUnlinkedMentions(
      FROM concepts c
      JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
      WHERE c.id <> $1
+       AND c.deleted_at IS NULL
        AND position(lower($2) IN lower(v.body_markdown)) > 0
        ${user.role === "admin" ? "" : "AND c.owner_id = $3"}
      LIMIT ${Math.max(1, Math.min(50, limit))}`,
@@ -1097,7 +1217,7 @@ export async function findBacklinks(
     `SELECT c.id, c.title, c.updated_at
      FROM concepts c
      JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
-     WHERE c.id <> $1 AND (v.body_markdown ILIKE $2 ESCAPE '\\' OR v.body_markdown ILIKE $3 ESCAPE '\\')
+     WHERE c.id <> $1 AND c.deleted_at IS NULL AND (v.body_markdown ILIKE $2 ESCAPE '\\' OR v.body_markdown ILIKE $3 ESCAPE '\\')
        ${user.role === "admin" ? "" : "AND c.owner_id = $4"}
      ORDER BY c.updated_at DESC
      LIMIT ${Math.max(1, Math.min(200, limit))}`,
@@ -1121,7 +1241,7 @@ export async function getBodiesByTitles(
     `SELECT c.id, c.title, v.body_markdown
      FROM concepts c
      JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
-     WHERE lower(c.title) = ANY($1::text[]) ${user.role === "admin" ? "" : "AND c.owner_id = $2"}`,
+     WHERE c.deleted_at IS NULL AND lower(c.title) = ANY($1::text[]) ${user.role === "admin" ? "" : "AND c.owner_id = $2"}`,
     user.role === "admin" ? [lowered] : [lowered, user.id]
   );
   for (const r of rows) map.set(r.title.toLowerCase(), { id: r.id, body: r.body_markdown });

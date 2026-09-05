@@ -1,5 +1,6 @@
 import { requireUser } from "@/lib/requireUser";
 import { ChangePasswordForm } from "@/components/change-password-form";
+import { OkfImportForm } from "@/components/okf-import-form";
 
 export default async function SettingsPage() {
   const user = await requireUser();
@@ -27,6 +28,14 @@ export default async function SettingsPage() {
         >
           下载 OKF ZIP
         </a>
+      </section>
+
+      <section className="rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
+        <h2 className="mb-2 font-medium">OKF 导入</h2>
+        <p className="mb-3 text-sm text-zinc-500 dark:text-zinc-400">
+          上传本知识库导出的 OKF ZIP（或同格式的 Markdown 打包）。内容完全相同的条目自动复用；同名但内容不同的条目不会覆盖已有知识，会列在冲突报告里等人工裁决。
+        </p>
+        <OkfImportForm />
       </section>
     </div>
   );

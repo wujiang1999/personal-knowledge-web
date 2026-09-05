@@ -248,3 +248,20 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
   ③ `npm install --omit=dev` 会剪掉 tailwindcss 等 devDependency，服务器构建必须完整 install；
   ④ Next 16 dev 默认拦跨域静态资源（403），本地调试用 `localhost` 而非 `127.0.0.1`；
   ⑤ bash 后台任务 300s 截止，SSH 隧道/长驻进程须 `timeout: 0`。
+
+- 2026-09-05（规划对齐迭代：回收站/版本回滚/OKF 导入）：对照《个人知识库项目规划》逐项盘点
+  （报告 `docs/plan-alignment-2026-09-05.md`），修复四个结构性缺口。**① 回收站（软删除）**——
+  迁移 **0015_concept_trash**（`concepts.deleted_at` + 双部分索引）；DELETE 改为入回收站，
+  `?purge=1` 彻底删除且仅对已回收条目生效（两段式销毁，409 拦一步到位）；`/trash` 页 +
+  `GET/DELETE /api/trash` + `POST /api/concepts/[id]/restore`；**全部查询面排除已删除**：
+  列表/BM25/算子/trgm/pgvector 语义召回/图谱/导出/链接网络/反链/未链接提及/curate/查重/自动摘要/
+  embed-backfill；详情页回收站横幅+恢复。**② 版本回滚+对比**——
+  `POST /api/concepts/[id]/versions/[v]/restore`（历史不可变，回滚=把旧版本生成为新版本，可再回滚）；
+  详情页版本历史「对比当前」（自研 LCS 行 diff `lib/diff.ts`，4M cell 上限兜底整块替换）+ 一键回滚。
+  **③ OKF 导入**——`POST /api/import/okf`（≤20MB ZIP）+ 设置页上传 UI；逐文件解析，
+  按规划 §三分类：内容全同→复用（duplicate）、同名不同内容→**冲突不覆盖**（conflicts 报告），
+  解析失败逐文件进 errors 不阻塞；往返导出→导入自检过。**④ MCP v0.5.0（ebfea20，契约同步）**——
+  kb_delete_concept 两段式语义 + 新增 kb_restore_concept / kb_restore_version / kb_list_trash /
+  kb_empty_trash（confirm 门禁），工具 12→16。138 测试 + 生产构建过；线上 E2E：
+  临时条目 回收站→搜索不可见→恢复→回滚→purge 全链路 + 导入冲突报告验证，临时数据已清理。
+  **注意**：`npm run ingest` 查重阈值现行代码为 **score≥25 或标题全同**（历史记录曾写 ≥60，以代码为准）。

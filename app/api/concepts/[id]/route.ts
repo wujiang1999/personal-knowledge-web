@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { addConceptVersion, deleteConcept, getConceptDetail, type ConceptInput } from "@/lib/concepts";
+import { addConceptVersion, getConceptDetail, purgeConcept, trashConcept, type ConceptInput } from "@/lib/concepts";
 import { requireApiUser } from "@/lib/requireUser";
 import { isUuid, withRoute } from "@/lib/withRoute";
 import { maybeQueueAutoSummary } from "@/lib/summary";
@@ -67,14 +67,30 @@ export const PATCH = withRoute(
 
 export const DELETE = withRoute(
   "DELETE /api/concepts/[id]",
-  async (_req: Request, { params }: { params: Promise<{ id: string }> }) => {
+  async (req: Request, { params }: { params: Promise<{ id: string }> }) => {
     const user = await requireApiUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { id } = await params;
     if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    const ok = await deleteConcept(id, user);
+
+    // Two-step destruction (规划 §三「不自动覆盖」): DELETE moves to the recycle
+    // bin; `?purge=1` hard-deletes, and only succeeds on already-trashed rows.
+    const purge = new URL(req.url).searchParams.get("purge");
+    if (purge === "1" || purge === "true") {
+      const result = await purgeConcept(id, user);
+      if (!result.ok) {
+        if (result.reason === "not-found") return NextResponse.json({ error: "Not found" }, { status: 404 });
+        return NextResponse.json(
+          { error: "条目不在回收站中：先 DELETE（软删除），再彻底删除" },
+          { status: 409 }
+        );
+      }
+      return NextResponse.json({ ok: true, purged: true });
+    }
+
+    const ok = await trashConcept(id, user);
     if (!ok) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, trashed: true });
   }
 );

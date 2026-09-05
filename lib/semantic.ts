@@ -113,11 +113,12 @@ export async function semanticCandidates(
   filters?: ParsedQuery
 ): Promise<{ id: string; similarity: number }[]> {
   const params: unknown[] = [toVectorLiteral(queryVector)];
-  const ownerClause = user.role === "admin" ? "" : `WHERE c.owner_id = $${((params.push(user.id), params.length))}`;
-  const filterClauses = filters ? operatorFilterClauses(filters, params) : [];
-  const where = [ownerClause, ...filterClauses.map((cl) => (ownerClause ? `AND ${cl}` : `WHERE ${cl}`))]
-    .filter(Boolean)
-    .join(" ");
+  // Alive filter first so trashed concepts never surface from stale embeddings
+  // (the backfill only re-syncs on write; a soft delete leaves rows behind).
+  const clauses = ["c.deleted_at IS NULL"];
+  if (user.role !== "admin") clauses.push(`c.owner_id = $${((params.push(user.id), params.length))}`);
+  if (filters) clauses.push(...operatorFilterClauses(filters, params));
+  const where = "WHERE " + clauses.join(" AND ");
   const { rows } = await query<{ id: string; similarity: number }>(
     `SELECT ce.concept_id AS id, 1 - (ce.embedding <=> $1::vector) AS similarity
      FROM concept_embeddings ce
@@ -179,6 +180,7 @@ export async function conceptRowsForIds(
      LEFT JOIN users ou ON ou.id = c.owner_id
      JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
      WHERE c.id = ANY($1::uuid[])
+       AND c.deleted_at IS NULL
        ${user.role === "admin" ? "" : "AND c.owner_id = $2"}`,
     user.role === "admin" ? [ids] : [ids, user.id]
   );

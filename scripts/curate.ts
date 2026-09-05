@@ -46,6 +46,7 @@ async function main() {
             v.body_markdown, v.content_hash
      FROM concepts c
      JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
+     WHERE c.deleted_at IS NULL
      ORDER BY c.title`
   );
   console.log(`== curate 报告（只读，共 ${rows.length} 条）==\n`);
