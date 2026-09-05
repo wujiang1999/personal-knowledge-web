@@ -1,6 +1,6 @@
-import Link from "next/link";
 import { requireUser } from "@/lib/requireUser";
 import { LogoutButton } from "@/components/logout-button";
+import { NavLinks } from "@/components/nav-links";
 import { QuickSwitcher } from "@/components/quick-switcher";
 import { ThemeToggle } from "@/components/theme-toggle";
 
@@ -24,15 +24,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <div className="mx-auto flex h-14 w-full max-w-5xl items-center justify-between px-4">
           <nav className="flex items-center gap-1">
             <span className="mr-2 font-semibold">知识库</span>
-            {links.map((l) => (
-              <Link
-                key={l.href}
-                href={l.href}
-                className="rounded-md px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-              >
-                {l.label}
-              </Link>
-            ))}
+            <NavLinks items={links} />
           </nav>
           <div className="flex items-center gap-1">
             <QuickSwitcher />
