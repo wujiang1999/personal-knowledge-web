@@ -186,11 +186,12 @@ CREATE INDEX IF NOT EXISTS idx_search_logs_time ON search_logs (created_at DESC)
 CREATE INDEX IF NOT EXISTS idx_search_logs_user_time ON search_logs (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_time ON llm_calls (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_user_time ON llm_calls (user_id, created_at DESC);
--- Added by db/migrations/0016: per-key attribution + traffic log.
-CREATE INDEX IF NOT EXISTS idx_search_logs_key_time ON search_logs (api_key_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_llm_calls_key_time   ON llm_calls (api_key_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_request_log_time     ON request_log (created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_request_log_key_time ON request_log (api_key_id, created_at DESC);
+-- Added by db/migrations/0016: request_log traffic table (above) plus the
+-- per-key attribution columns/indexes on search_logs / llm_calls. Those
+-- indexes live in the migration only — like the 0015 recycle-bin indexes,
+-- they reference columns that existing databases get from the migration, and
+-- would fail here (base schema runs before migrations; CREATE TABLE IF NOT
+-- EXISTS no-ops on databases that predate 0016).
 -- Recycle-bin partial indexes are created by db/migrations/0015 only — like
 -- idx_sources_hash_concept (0012), they reference a migration-added column
 -- (deleted_at) and would fail here on databases that haven't run 0015 yet.
