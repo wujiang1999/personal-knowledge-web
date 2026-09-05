@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/requireUser";
 import { listConcepts, listSources, listFolders, buildCategoryTree, type CategoryTreeNode } from "@/lib/concepts";
+import { getLibraryHealth } from "@/lib/stats";
 import { DirectoryTree, type DirectoryTreeFolder } from "@/components/directory-tree";
 
 function countSubtree(node: CategoryTreeNode): number {
@@ -20,17 +21,29 @@ function toFolder(node: CategoryTreeNode): DirectoryTreeFolder {
 
 export default async function DashboardPage() {
   const user = await requireUser();
-  const [allConcepts, sources, folderPaths] = await Promise.all([
+  const [allConcepts, sources, folderPaths, health] = await Promise.all([
     listConcepts({ user }),
     listSources(user),
     listFolders(user),
+    getLibraryHealth(user),
   ]);
   // listConcepts orders by updated_at DESC, so the top 10 are the most recent.
   const recent = allConcepts.slice(0, 10);
 
-  const stats = [
+  const stats: { label: string; value: string | number; hint?: string }[] = [
     { label: "知识条目", value: allConcepts.length },
     { label: "原始来源", value: sources.length },
+    // Library-wide ops tiles (admin only — getLibraryHealth is null otherwise).
+    ...(health
+      ? [
+          {
+            label: "向量覆盖",
+            value: `${health.embeddingCoverage}%`,
+            hint: `${health.embeddingRows}/${health.conceptsTotal}${health.embeddingStale > 0 ? `，陈旧 ${health.embeddingStale}` : ""}`,
+          },
+          { label: "回收站", value: String(health.trashTotal), hint: "待清理" },
+        ]
+      : []),
   ];
 
   const { roots, rootConcepts } = buildCategoryTree(allConcepts, folderPaths);
@@ -41,7 +54,10 @@ export default async function DashboardPage() {
         {stats.map((s) => (
           <div key={s.label} className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <div className="text-3xl font-semibold">{s.value}</div>
-            <div className="text-sm text-zinc-500 dark:text-zinc-400">{s.label}</div>
+            <div className="text-sm text-zinc-500 dark:text-zinc-400">
+              {s.label}
+              {s.hint && <span className="ml-1 text-xs text-zinc-400 dark:text-zinc-500">{s.hint}</span>}
+            </div>
           </div>
         ))}
         <Link

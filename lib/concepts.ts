@@ -5,7 +5,7 @@ import type { ScopeUser } from "./requireUser";
 import { conceptRowsForIds, hasSemanticSearch, rerankWithSemantic, semanticCandidates } from "./semantic";
 import { llmEmbed } from "./llm";
 import { BM25_B, BM25_K1, DEPRECATED_FACTOR, tokenizeQuery } from "./bm25";
-import { logSearch } from "./logs";
+import { logRetrievalHits, logSearch } from "./logs";
 import { operatorFilterClauses, parseSearchQuery } from "./search-syntax";
 
 /** Thrown when a concept lookup by id finds no row (typed 404, not string-match). */
@@ -473,7 +473,7 @@ export async function searchConcepts(
   // lexical-only: logged here, the stage below sees undefined.
   const embedPromise =
     offset === 0 && needle.length > 0 && (await hasSemanticSearch())
-      ? llmEmbed([needle.slice(0, 4000)], { purpose: "search-embed", userId: user.id })
+      ? llmEmbed([needle.slice(0, 4000)], { purpose: "search-embed", userId: user.id, apiKeyId: user.apiKeyId })
           .then((v) => v[0])
           .catch((err: unknown) => {
             console.error("[semantic] recall failed, lexical only:", err instanceof Error ? err.message : err);
@@ -712,10 +712,15 @@ export async function searchConcepts(
     deduped.push(r);
   }
   results = deduped;
+  // Per-entry retrieval counter (ui|api only — the ingest dedup probe must
+  // not inflate the curation signal; cache hits never reach this line).
+  // Feeds /stats hot entries + the never-retrieved report. Fire-and-forget.
+  if (source !== "ingest") logRetrievalHits(results.map((r) => r.id));
   // Usage record for /logs (query record page). Fire-and-forget; cache hits
   // above never reach this line.
   logSearch({
     userId: user.id,
+    apiKeyId: user.apiKeyId,
     query: rawKey,
     source,
     mode,

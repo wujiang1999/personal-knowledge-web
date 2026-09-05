@@ -118,10 +118,12 @@ function readEmbeddingRows(data: unknown): { index: number; embedding: unknown }
 }
 
 /** Context attached to a call log row: which feature triggered the call and
- * whose user it was (null = system/script). */
+ * whose user it was (null = system/script). apiKeyId is the Bearer key of the
+ * request that triggered the call, for per-key usage attribution on /stats. */
 export interface LlmCallMeta {
   purpose: string;
   userId?: string | null;
+  apiKeyId?: string | null;
 }
 
 /** Options for the JSON-mode chat calls. */
@@ -169,6 +171,7 @@ export async function llmChatJsonWith<T>(
     kind: "llm",
     purpose: meta.purpose,
     userId: meta.userId ?? null,
+    apiKeyId: meta.apiKeyId ?? null,
     model: cfg.model,
     inputChars,
     promptTokens: usage.promptTokens,
@@ -224,6 +227,7 @@ export async function llmEmbed(
 ): Promise<number[][]> {
   const purpose = meta?.purpose ?? "embed";
   const userId = meta?.userId ?? null;
+  const apiKeyId = meta?.apiKeyId ?? null;
   const startedAt = Date.now();
   const inputChars = texts.reduce((s, t) => s + t.length, 0);
   let model = "unknown";
@@ -231,6 +235,7 @@ export async function llmEmbed(
     kind: "embedding",
     purpose,
     userId,
+    apiKeyId,
     model,
     inputChars,
     promptTokens: null,

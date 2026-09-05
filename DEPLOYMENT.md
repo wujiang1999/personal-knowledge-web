@@ -58,6 +58,20 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 ## 变更历史
 
+- 2026-09-05（运营统计批次：用量归因 + 流量观测 + 库健康）：对照参考产品的运维控制台补齐可观测面，
+  数据面全部复用/轻扩现有表。**① 迁移 0016（usage_attribution）**——`search_logs`/`llm_calls` 增
+  `api_key_id`（Bearer key 归因；cookie 会话为 NULL）；`concepts` 增 `retrieval_count`/
+  `last_retrieved_at`（真实被检索计数：ui|api 来源才 +1，ingest 查重探测与缓存命中不计）+ 降序部分
+  索引（引用 deleted_at，仍按惯例只存迁移文件）；新表 `request_log`（每 API 请求一行：route/method/
+  path/status/耗时/key 归因），`lib/withRoute` 统一 fire-and-forget 写入，插入端 2% 概率顺手清理
+  180 天前旧行。**② 归因链**——`AuthUser.apiKeyId` 自 `getUserByApiKey` 透传至 search_logs/
+  llm_calls（含 search-embed 的 embedding 调用与 `POST /api/logs/llm` 的服务端归因，MCP 上报契约
+  不变）。**③ /stats 页 + `GET /api/stats?days=N`**——流量概览（总数/成功率/P50/P95）、检索质量
+  （零结果率/平均命中/路径分布：「模糊兜底/纯语义」占比高即 BM25 未接住的信号）、密钥用量表
+  （调用量/成功率/知识贡献=该 key 的非 GET 写入数）、高频被检索条目、库健康（向量覆盖+陈旧向量/
+  回收站/零检索条目/版本行/附件/DB 体积/部署 commit/启动时间）。admin 全库口径，普通用户仅本人，
+  `keys`/`library` 对非 admin 为 null；`/api/health` 契约未动。**④ dashboard** 管理员新增「向量覆盖/
+  回收站」瓷砖。测试 +4（`clampDays` 对缺省 `?days=` 的回落 bug 被新测试抓出后修复）。
 - 2026-08-31（知识库管理优化批次，依据《深入理解 AI Agent》第 3 章/第 9 章）：**① 双向引用网络（§3.3.2）**——
   正文支持 `[[条目标题]]` 链接：`lib/links.ts` 解析，`components/concept-body.tsx` 渲染（保持 `<pre>`
   纯文本语义、未解析链接灰显），详情页新增「被引用」反向链接面板（`findBacklinks`，ILIKE + 转义）。

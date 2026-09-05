@@ -38,8 +38,8 @@ export async function getUserByApiKey(): Promise<AuthUser | null> {
   if (!key) return null;
 
   const hash = hashApiKey(key);
-  const { rows } = await query<{ id: string; username: string; token_version: number; role: string }>(
-    `SELECT u.id, u.username, u.token_version, u.role
+  const { rows } = await query<{ id: string; username: string; token_version: number; role: string; api_key_id: string }>(
+    `SELECT u.id, u.username, u.token_version, u.role, k.id AS api_key_id
      FROM api_keys k
      JOIN users u ON u.id = k.user_id
      WHERE k.key_hash = $1 AND k.revoked_at IS NULL`,
@@ -58,5 +58,25 @@ export async function getUserByApiKey(): Promise<AuthUser | null> {
     username: rows[0].username,
     tokenVersion: rows[0].token_version,
     role: rows[0].role === "admin" ? "admin" : "user",
+    apiKeyId: rows[0].api_key_id,
   };
+}
+
+/**
+ * Best-effort attribution lookup for request logging (lib/withRoute):
+ * resolves the Bearer key's id + owner in one indexed SELECT, without the
+ * session fallback. Null when no well-formed Bearer header is present or the
+ * key is unknown/revoked — request_log rows for cookie sessions stay
+ * unattributed (search_logs/llm_calls carry user attribution for those).
+ */
+export async function resolveKeyContext(
+  authHeader: string | null
+): Promise<{ apiKeyId: string; userId: string } | null> {
+  const key = extractBearerKey(authHeader);
+  if (!key) return null;
+  const { rows } = await query<{ id: string; user_id: string }>(
+    "SELECT id, user_id FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL",
+    [hashApiKey(key)]
+  );
+  return rows.length > 0 ? { apiKeyId: rows[0].id, userId: rows[0].user_id } : null;
 }

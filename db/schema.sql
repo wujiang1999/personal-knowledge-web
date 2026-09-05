@@ -47,7 +47,12 @@ CREATE TABLE IF NOT EXISTS concepts (
   -- 回收站（软删除）：NULL = 在库；非 NULL = 已删除，仅回收站可见/可恢复。
   -- 默认可见面（列表/搜索/图谱/导出/链接网络）一律过滤 deleted_at IS NULL，
   -- 只有回收站中的「彻底删除」才真正 CASCADE 清除。
-  deleted_at      timestamptz
+  deleted_at      timestamptz,
+  -- 被检索计数（0016）：searchConcepts 每次真实返回（ui|api 来源，ingest
+  -- 查重探测不计、缓存命中不计）+1。/stats 高频条目与「零检索条目」整理
+  -- 信号的计数面。降序部分索引由 0016 创建（引用 deleted_at，见索引区注释）。
+  retrieval_count   integer NOT NULL DEFAULT 0,
+  last_retrieved_at timestamptz
 );
 
 -- -------------------------------
@@ -115,6 +120,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 CREATE TABLE IF NOT EXISTS search_logs (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id      uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  api_key_id   uuid REFERENCES api_keys(id) ON DELETE SET NULL, -- Bearer key attribution (0016); null = cookie session
   query        text NOT NULL,
   source       text NOT NULL DEFAULT 'api',  -- ui | api | ingest (caller surface)
   mode         text NOT NULL,                -- bm25 | trgm-fallback | semantic-only
@@ -127,6 +133,7 @@ CREATE TABLE IF NOT EXISTS search_logs (
 CREATE TABLE IF NOT EXISTS llm_calls (
   id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id           uuid REFERENCES users(id) ON DELETE CASCADE, -- null = system/script call
+  api_key_id        uuid REFERENCES api_keys(id) ON DELETE SET NULL, -- Bearer key attribution (0016); null = cookie/system
   kind              text NOT NULL,               -- 'llm' | 'embedding'
   purpose           text NOT NULL,               -- auto-summary | search-embed | ingest-atomize | backfill | chat
   model             text NOT NULL,
@@ -137,6 +144,22 @@ CREATE TABLE IF NOT EXISTS llm_calls (
   ok                boolean NOT NULL,
   error             text,
   created_at        timestamptz NOT NULL DEFAULT now()
+);
+
+-- One row per API request (0016): lib/withRoute fire-and-forget writes, giving
+-- /stats its traffic overview (totals / success rate / p50-p95) and per-key
+-- usage + "knowledge contribution" (non-GET writes on /api/concepts*). Rows
+-- older than 180 days are dropped probabilistically on insert.
+CREATE TABLE IF NOT EXISTS request_log (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    uuid REFERENCES users(id) ON DELETE SET NULL,
+  api_key_id uuid REFERENCES api_keys(id) ON DELETE SET NULL,
+  route      text NOT NULL,  -- withRoute name, 'GET /api/search' shape
+  method     text NOT NULL,
+  path       text NOT NULL,
+  status     int NOT NULL,
+  took_ms    int NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- -------------------------------
@@ -163,9 +186,15 @@ CREATE INDEX IF NOT EXISTS idx_search_logs_time ON search_logs (created_at DESC)
 CREATE INDEX IF NOT EXISTS idx_search_logs_user_time ON search_logs (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_time ON llm_calls (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_user_time ON llm_calls (user_id, created_at DESC);
+-- Added by db/migrations/0016: per-key attribution + traffic log.
+CREATE INDEX IF NOT EXISTS idx_search_logs_key_time ON search_logs (api_key_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_key_time   ON llm_calls (api_key_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_request_log_time     ON request_log (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_request_log_key_time ON request_log (api_key_id, created_at DESC);
 -- Recycle-bin partial indexes are created by db/migrations/0015 only — like
 -- idx_sources_hash_concept (0012), they reference a migration-added column
 -- (deleted_at) and would fail here on databases that haven't run 0015 yet.
+-- Same rule for the concepts retrieval_count partial index (0016).
 
 -- -------------------------------
 -- tsvector maintenance trigger

@@ -19,6 +19,8 @@ export const POST = withRoute("POST /api/logs/llm", async (req: Request) => {
   const parsed = llmCallLogSchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: "invalid request" }, { status: 400 });
 
-  await insertLlmCall(user.id, parsed.data);
+  // Third arg is server-side attribution (the authenticated key) — remote
+  // clients never send it; the MCP contract above is unchanged.
+  await insertLlmCall(user.id, parsed.data, user.apiKeyId);
   return NextResponse.json({ ok: true });
 });

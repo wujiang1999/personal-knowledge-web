@@ -9,6 +9,7 @@ const links = [
   { href: "/knowledge", label: "知识" },
   { href: "/graph", label: "图谱" },
   { href: "/sources", label: "来源" },
+  { href: "/stats", label: "统计" },
   { href: "/logs", label: "记录" },
   { href: "/trash", label: "回收站" },
   { href: "/settings", label: "设置" },

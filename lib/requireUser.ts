@@ -9,10 +9,15 @@ export interface AuthUser {
   tokenVersion: number;
   /** 'admin' accounts bypass owner scoping and see/act on all users' data. */
   role: "user" | "admin";
+  /** Set only when the caller authenticated via a Bearer API key — the
+   * attribution handle that search/LLM/request logs store for per-key usage
+   * stats. Cookie sessions leave it unset. */
+  apiKeyId?: string;
 }
 
-/** Owner-scoping only needs identity + role; lib functions take this shape. */
-export type ScopeUser = Pick<AuthUser, "id" | "role">;
+/** Owner-scoping only needs identity + role; lib functions take this shape.
+ * apiKeyId rides along when present so logging calls can attribute usage. */
+export type ScopeUser = Pick<AuthUser, "id" | "role"> & { apiKeyId?: string };
 
 /**
  * Load the authenticated user or redirect to /login.

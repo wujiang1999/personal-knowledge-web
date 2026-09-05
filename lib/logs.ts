@@ -10,6 +10,9 @@ import type { ScopeUser } from "./requireUser";
 
 export interface SearchLogInput {
   userId: string;
+  /** Bearer key attribution when the caller used an API key (null/undefined
+   * for cookie sessions). Feeds the per-key usage table on /stats. */
+  apiKeyId?: string | null;
   query: string;
   /** Caller surface: ui | api | ingest. */
   source: string;
@@ -22,10 +25,11 @@ export interface SearchLogInput {
 
 export function logSearch(input: SearchLogInput): void {
   void query(
-    `INSERT INTO search_logs (user_id, query, source, mode, result_count, total, took_ms)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    `INSERT INTO search_logs (user_id, api_key_id, query, source, mode, result_count, total, took_ms)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
     [
       input.userId,
+      input.apiKeyId ?? null,
       input.query.slice(0, 500),
       input.source.slice(0, 20),
       input.mode.slice(0, 30),
@@ -38,9 +42,66 @@ export function logSearch(input: SearchLogInput): void {
   });
 }
 
+/** Per-entry retrieval counter: one batched UPDATE per search that actually
+ * returned results (ui|api sources only — the ingest dedup probe doesn't
+ * count, and cache hits never reach the caller). Feeds the /stats hot-entries
+ * table and the never-retrieved curation signal. Fire-and-forget. */
+export function logRetrievalHits(conceptIds: string[]): void {
+  if (conceptIds.length === 0) return;
+  void query(
+    `UPDATE concepts SET retrieval_count = retrieval_count + 1, last_retrieved_at = now()
+     WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`,
+    [conceptIds]
+  ).catch((err: unknown) => {
+    console.error("[logs] retrieval count failed:", err instanceof Error ? err.message : err);
+  });
+}
+
+export interface RequestLogInput {
+  userId?: string | null;
+  apiKeyId?: string | null;
+  /** withRoute name, 'GET /api/search' shape. */
+  route: string;
+  method: string;
+  path: string;
+  status: number;
+  tookMs: number;
+}
+
+/** Retention horizon for request_log — traffic rows are diagnostics, not
+ * audit records; 180 days is ample for trend-spotting at personal scale. */
+const REQUEST_LOG_RETENTION_DAYS = 180;
+
+export function logRequest(input: RequestLogInput): void {
+  void query(
+    `INSERT INTO request_log (user_id, api_key_id, route, method, path, status, took_ms)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [
+      input.userId ?? null,
+      input.apiKeyId ?? null,
+      input.route.slice(0, 120),
+      input.method.slice(0, 10),
+      input.path.slice(0, 200),
+      Math.trunc(input.status),
+      Math.max(0, Math.trunc(input.tookMs)),
+    ]
+  ).catch((err: unknown) => {
+    console.error("[logs] request log failed:", err instanceof Error ? err.message : err);
+  });
+  // Piggyback retention: ~2% of inserts also drop rows past the horizon, so
+  // the table self-heals without a cron job while keeping writes cheap.
+  if (Math.random() < 0.02) {
+    void query("DELETE FROM request_log WHERE created_at < now() - make_interval(days => $1)", [
+      REQUEST_LOG_RETENTION_DAYS,
+    ]).catch(() => {});
+  }
+}
+
 export interface LlmCallLogInput {
   /** null = system/script call (backfill). */
   userId: string | null;
+  /** Bearer key attribution when the triggering request used an API key. */
+  apiKeyId?: string | null;
   kind: "llm" | "embedding";
   purpose: string;
   model: string;
@@ -79,13 +140,18 @@ export const llmCallLogSchema = z.object({
 export type LlmCallLogPayload = z.output<typeof llmCallLogSchema>;
 
 /** Awaited insert used by the ingest API route (the route returns after the
- * row is durably queued). */
-export async function insertLlmCall(userId: string | null, p: LlmCallLogPayload): Promise<void> {
+ * row is durably queued). apiKeyId is server-side attribution only — remote
+ * clients never send it; the route passes the authenticated key's id. */
+export async function insertLlmCall(
+  userId: string | null,
+  p: LlmCallLogPayload,
+  apiKeyId?: string | null
+): Promise<void> {
   await query(
     `INSERT INTO llm_calls
-       (user_id, kind, purpose, model, input_chars, prompt_tokens, completion_tokens, took_ms, ok, error)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-    [userId, p.kind, p.purpose, p.model, p.input_chars, p.prompt_tokens, p.completion_tokens, p.took_ms, p.ok, p.error]
+       (user_id, api_key_id, kind, purpose, model, input_chars, prompt_tokens, completion_tokens, took_ms, ok, error)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+    [userId, apiKeyId ?? null, p.kind, p.purpose, p.model, p.input_chars, p.prompt_tokens, p.completion_tokens, p.took_ms, p.ok, p.error]
   );
 }
 
@@ -100,7 +166,7 @@ export function logLlmCall(input: LlmCallLogInput): void {
     took_ms: Math.max(0, Math.trunc(input.tookMs)),
     ok: input.ok,
     error: input.error === null ? null : input.error.slice(0, 500),
-  }).catch((err: unknown) => {
+  }, input.apiKeyId).catch((err: unknown) => {
     console.error("[logs] llm call log failed:", err instanceof Error ? err.message : err);
   });
 }
