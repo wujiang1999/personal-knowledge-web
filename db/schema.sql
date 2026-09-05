@@ -26,7 +26,12 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash text NOT NULL,
   token_version integer NOT NULL DEFAULT 1,
   role          text NOT NULL DEFAULT 'user',  -- 'user' | 'admin'; admin bypasses owner scoping
-  created_at    timestamptz NOT NULL DEFAULT now()
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  -- 账户管理（0017）：disabled_at 非 NULL = 已禁用——不能登录、既有会话随
+  -- token_version 自增作废、名下 API key 全部被拒（key 查询联表过滤）；
+  -- last_login_at 由登录路由记录，/users 页据此看账户活跃度。
+  disabled_at   timestamptz,
+  last_login_at timestamptz
 );
 
 -- -------------------------------

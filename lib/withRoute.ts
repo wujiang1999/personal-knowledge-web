@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { AttachmentTooLargeError } from "./attachments";
 import { DuplicateBodyError, NotFoundError } from "./concepts";
+import { UserExistsError } from "./users";
 import { logRequest } from "./logs";
 import { resolveKeyContext } from "./apiKey";
 
@@ -43,6 +44,9 @@ function mapRouteError(name: string, err: unknown): Response {
       { error: err.message, existingId: err.existingId, existingTitle: err.existingTitle },
       { status: 409 }
     );
+  }
+  if (err instanceof UserExistsError) {
+    return NextResponse.json({ error: err.message }, { status: 409 });
   }
   console.error(`[api] ${name} failed:`, err);
   return NextResponse.json({ error: "internal error" }, { status: 500 });

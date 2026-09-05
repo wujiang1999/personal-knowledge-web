@@ -26,8 +26,8 @@ export type ScopeUser = Pick<AuthUser, "id" | "role"> & { apiKeyId?: string };
 export async function requireUser(): Promise<AuthUser> {
   const session = await getSession();
   if (!session) redirect("/login");
-  const { rows } = await query<{ id: string; username: string; token_version: number; role: string }>(
-    "SELECT id, username, token_version, role FROM users WHERE id = $1",
+  const { rows } = await query<{ id: string; username: string; token_version: number; role: string; disabled_at: string | null }>(
+    "SELECT id, username, token_version, role, disabled_at FROM users WHERE id = $1",
     [session.sub]
   );
   // token_version is the authoritative revocation check: middleware only
@@ -38,6 +38,11 @@ export async function requireUser(): Promise<AuthUser> {
   // /dashboard, so /login would loop forever (renders as a black screen).
   // /api/auth/expire deletes the cookie so the next hop reaches the form.
   if (rows.length === 0 || rows[0].token_version !== session.tokenVersion) redirect("/api/auth/expire");
+  // Disabled accounts die here too: the session itself is signature-valid, so
+  // bounce it to /expire to clear the cookie; login will refuse with the
+  // disabled message (the disable action already bumped token_version, so
+  // this row would usually fail the check above anyway).
+  if (rows[0].disabled_at) redirect("/api/auth/expire");
   return {
     id: rows[0].id,
     username: rows[0].username,
@@ -60,11 +65,13 @@ export async function requireApiUser(): Promise<AuthUser | null> {
   if (viaKey) return viaKey;
   const session = await getSession();
   if (!session) return null;
-  const { rows } = await query<{ id: string; username: string; token_version: number; role: string }>(
-    "SELECT id, username, token_version, role FROM users WHERE id = $1",
+  const { rows } = await query<{ id: string; username: string; token_version: number; role: string; disabled_at: string | null }>(
+    "SELECT id, username, token_version, role, disabled_at FROM users WHERE id = $1",
     [session.sub]
   );
   if (rows.length === 0 || rows[0].token_version !== session.tokenVersion) return null;
+  // Disabled accounts authenticate as nothing — same as an expired session.
+  if (rows[0].disabled_at) return null;
   return {
     id: rows[0].id,
     username: rows[0].username,

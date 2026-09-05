@@ -4,7 +4,7 @@ import { NavLinks } from "@/components/nav-links";
 import { QuickSwitcher } from "@/components/quick-switcher";
 import { ThemeToggle } from "@/components/theme-toggle";
 
-const links = [
+const baseLinks = [
   { href: "/dashboard", label: "概览" },
   { href: "/knowledge", label: "知识" },
   { href: "/graph", label: "图谱" },
@@ -17,6 +17,11 @@ const links = [
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
+  // 账户管理是管理员入口；普通用户不渲染也不可达（页面自身还有直接 URL 守卫）。
+  const links =
+    user.role === "admin"
+      ? [...baseLinks.slice(0, 7), { href: "/users", label: "账户" }, baseLinks[7]]
+      : baseLinks;
 
   return (
     <div className="flex min-h-screen flex-col">

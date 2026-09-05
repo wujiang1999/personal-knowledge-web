@@ -45,8 +45,8 @@ export const POST = withRoute("POST /api/auth/login", async (req: NextRequest) =
     );
   }
 
-  const { rows } = await query<{ id: string; username: string; password_hash: string; token_version: number }>(
-    "SELECT id, username, password_hash, token_version FROM users WHERE username = $1",
+  const { rows } = await query<{ id: string; username: string; password_hash: string; token_version: number; disabled_at: string | null }>(
+    "SELECT id, username, password_hash, token_version, disabled_at FROM users WHERE username = $1",
     [body.username]
   );
 
@@ -64,8 +64,18 @@ export const POST = withRoute("POST /api/auth/login", async (req: NextRequest) =
     recordFailure(body.username, ip);
     return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
   }
+  // Disabled account: the password matched, but the account is switched off.
+  // Explicit message (admin-managed private KB) and a recorded failure so a
+  // credential-stuffing loop against a disabled account still gets throttled.
+  if (user.disabled_at) {
+    recordFailure(body.username, ip);
+    return NextResponse.json({ error: "该账号已被管理员禁用" }, { status: 403 });
+  }
 
   clearFailures(body.username, ip);
+  // Best-effort activity stamp for the /users console; a failed stamp never
+  // blocks a successful login.
+  void query("UPDATE users SET last_login_at = now() WHERE id = $1", [user.id]).catch(() => {});
   await createSession({ id: user.id, username: user.username, tokenVersion: user.token_version });
   return NextResponse.json({ ok: true, username: user.username });
 });

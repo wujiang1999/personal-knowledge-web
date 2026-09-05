@@ -58,6 +58,22 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 ## 变更历史
 
+- 2026-09-06（多账户管理批次）：把此前只能 SSH CLI 完成的账户运维搬进网页后台。**① 迁移 0017**——
+  `users` 增 `disabled_at`（软禁用）与 `last_login_at`（登录路由记录）。**② 禁用三链路即时生效**——
+  登录 403（「该账号已被管理员禁用」，且记一次失败供限流）；`requireUser`/`requireApiUser` 对禁用账号
+  视同会话失效（页面跳 /api/auth/expire 清 Cookie）；`getUserByApiKey` 联表过滤 `disabled_at`，禁用
+  账号名下全部 API key 立即 401。禁用动作同时 bump token_version 杀活会话；数据保留可随时启用。
+  **③ `/users` 账户页（admin 导航「账户」，非 admin 隐藏 + 直接 URL 重定向兜底）**——列表（角色/状态/
+  条目数/活跃 key 数/最近登录/创建时间）、创建账号（初始密码留空则服务端生成无歧义 12 位随机串，明文
+  只随创建响应返回一次）、重置密码（token_version 自增踢全部会话）、角色切换、禁用/启用；守卫在
+  `lib/users.ts` 纯函数 `checkAdminGuard`：禁止操作当前登录账号（防自锁）、禁止解除最后一名管理员
+  （demote/disable 前 `countAdmins`），UI 上自己的行不渲染危险按钮。**④ 设置页「API 密钥」自助**——
+  `GET/POST /api/keys` + `DELETE /api/keys/[id]`（owner 域内）：生成（`pkb_`+48hex，同 CLI 形态，
+  活跃上限 10 个 409 拦截）、吊销（即时 401）；明文只在生成时显示一次，服务端仅存 SHA-256。CLI
+  `db:add-user`/`db:create-api-key` 保留（引导/CI 场景）。**用户名规则**：`[\p{L}\p{N}_.-]{2,32}`，
+  支持中文（ASCII `\w` 会误拒中文名，测试抓出）。MCP v0.7.0 同步：`kb_list_users`（只读，admin key
+  专用）；账号/key 的变更类端点**有意不暴露**给 MCP——凭据明文经 agent 转录本有泄漏面，且误操作
+  半径过大。E2E：临时号创建→key 生成→禁用→登录 403/key 401→启用恢复→清理，全部通过。
 - 2026-09-05（运营统计批次：用量归因 + 流量观测 + 库健康）：对照参考产品的运维控制台补齐可观测面，
   数据面全部复用/轻扩现有表。**① 迁移 0016（usage_attribution）**——`search_logs`/`llm_calls` 增
   `api_key_id`（Bearer key 归因；cookie 会话为 NULL）；`concepts` 增 `retrieval_count`/

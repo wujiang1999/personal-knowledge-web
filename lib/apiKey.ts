@@ -41,7 +41,7 @@ export async function getUserByApiKey(): Promise<AuthUser | null> {
   const { rows } = await query<{ id: string; username: string; token_version: number; role: string; api_key_id: string }>(
     `SELECT u.id, u.username, u.token_version, u.role, k.id AS api_key_id
      FROM api_keys k
-     JOIN users u ON u.id = k.user_id
+     JOIN users u ON u.id = k.user_id AND u.disabled_at IS NULL
      WHERE k.key_hash = $1 AND k.revoked_at IS NULL`,
     [hash]
   );
@@ -79,4 +79,36 @@ export async function resolveKeyContext(
     [hashApiKey(key)]
   );
   return rows.length > 0 ? { apiKeyId: rows[0].id, userId: rows[0].user_id } : null;
+}
+
+export interface ApiKeyRow {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
+/** One account's keys for the /settings self-service panel (never the hash).
+ * Revoked keys sort last so live ones stay on top. */
+export async function listApiKeys(userId: string): Promise<ApiKeyRow[]> {
+  const { rows } = await query<{
+    id: string;
+    name: string;
+    created_at: string;
+    last_used_at: string | null;
+    revoked_at: string | null;
+  }>(
+    `SELECT id, name, created_at, last_used_at, revoked_at
+     FROM api_keys WHERE user_id = $1
+     ORDER BY (revoked_at IS NULL) DESC, created_at DESC`,
+    [userId]
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    createdAt: r.created_at,
+    lastUsedAt: r.last_used_at,
+    revokedAt: r.revoked_at,
+  }));
 }
