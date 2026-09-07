@@ -8,7 +8,7 @@ const admin: ScopeUser = { id: "a1", role: "admin" };
 describe("logWhereClause", () => {
   it("scopes non-admins and applies a days window", () => {
     const params: unknown[] = [];
-    const where = logWhereClause("s", user, { days: 7 }, params);
+    const where = logWhereClause("s.user_id", "s.created_at", user, { days: 7 }, params);
     expect(where).toContain("s.user_id = $1");
     expect(where).toContain("s.created_at >= now() - ($2 * interval '1 day')");
     expect(params).toEqual(["u1", 7]);
@@ -16,7 +16,7 @@ describe("logWhereClause", () => {
 
   it("filters a single Beijing calendar day for admins", () => {
     const params: unknown[] = [];
-    const where = logWhereClause("l", admin, { date: "2026-09-07" }, params);
+    const where = logWhereClause("l.user_id", "l.created_at", admin, { date: "2026-09-07" }, params);
     expect(where).not.toContain("user_id");
     expect(where).toContain("(l.created_at AT TIME ZONE");
     expect(where).toContain("::date = $1::date");
@@ -25,7 +25,7 @@ describe("logWhereClause", () => {
 
   it("combines owner scope, days and date with AND", () => {
     const params: unknown[] = [];
-    const where = logWhereClause("s", user, { days: 30, date: "2026-09-01" }, params);
+    const where = logWhereClause("s.user_id", "s.created_at", user, { days: 30, date: "2026-09-01" }, params);
     expect((where.match(/ AND /g) ?? []).length).toBe(2);
     expect(where).toContain("::date");
     expect(params).toEqual(["u1", 30, "2026-09-01"]);
@@ -33,8 +33,8 @@ describe("logWhereClause", () => {
 
   it("returns an empty clause and no params without a filter", () => {
     const params: unknown[] = [];
-    expect(logWhereClause("s", admin, undefined, params)).toBe("");
-    expect(logWhereClause("s", admin, {} as LogFilter, params)).toBe("");
+    expect(logWhereClause("s.user_id", "s.created_at", admin, undefined, params)).toBe("");
+    expect(logWhereClause("s.user_id", "s.created_at", admin, {} as LogFilter, params)).toBe("");
     expect(params).toEqual([]);
   });
 });

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/requireUser";
+import { CollapsibleSection } from "@/components/collapsible-section";
 import {
   listLlmCalls,
   listSearchLogs,
@@ -129,33 +130,6 @@ function CallTable({ rows, showUser }: { rows: LlmCallRow[]; showUser: boolean }
   );
 }
 
-/** Collapsible log section: collapsed by default (the tables run 100+ rows),
- * the summary always shows the row count and the newest timestamp so the
- * section stays scannable without expanding. */
-function LogSection({
-  title,
-  count,
-  newest,
-  children,
-}: {
-  title: string;
-  count: number;
-  newest: string | null;
-  children: React.ReactNode;
-}) {
-  const summary = `${title} · ${count} 条${newest ? ` · 最新 ${fmtTime(newest)}` : ""}`;
-  return (
-    <details className="group rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-      <summary className="flex cursor-pointer select-none items-center justify-between px-4 py-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
-        <span>{summary}</span>
-        <span className="text-xs text-zinc-500 group-open:hidden dark:text-zinc-400">点击展开</span>
-        <span className="hidden text-xs text-zinc-500 group-open:inline dark:text-zinc-400">点击收起</span>
-      </summary>
-      <div className="border-t border-zinc-100 p-4 dark:border-zinc-800">{children}</div>
-    </details>
-  );
-}
-
 export default async function LogsPage({
   searchParams,
 }: {
@@ -240,17 +214,13 @@ export default async function LogsPage({
         )}
       </form>
 
-      <section className="space-y-3">
-        <LogSection title="查询记录" count={searches.length} newest={searches[0]?.created_at ?? null}>
-          <SearchTable rows={searches} showUser={showUser} />
-        </LogSection>
-      </section>
+      <CollapsibleSection title="查询记录" count={searches.length} newest={searches[0]?.created_at ?? null}>
+        <SearchTable rows={searches} showUser={showUser} />
+      </CollapsibleSection>
 
-      <section className="space-y-3">
-        <LogSection title="LLM / Embedding 调用记录" count={calls.length} newest={calls[0]?.created_at ?? null}>
-          <CallTable rows={calls} showUser={showUser} />
-        </LogSection>
-      </section>
+      <CollapsibleSection title="LLM / Embedding 调用记录" count={calls.length} newest={calls[0]?.created_at ?? null}>
+        <CallTable rows={calls} showUser={showUser} />
+      </CollapsibleSection>
     </div>
   );
 }

@@ -12,11 +12,14 @@ export interface LogFilter {
   date?: string;
 }
 
-/** Build the WHERE clause shared by listSearchLogs/listLlmCalls: owner scope
- * for non-admins + the optional time filter. Appends bound params to `params`
- * and returns "" or " WHERE ..." — the column alias differs per table. */
+/** Build the WHERE clause shared by the record-list queries (search_logs,
+ * llm_calls, sources): owner scope for non-admins + the optional time filter.
+ * Appends bound params to `params` and returns "" or " WHERE ...". The two
+ * fully-qualified expressions differ per query — sources join concepts, so
+ * ownership and time live on different tables/aliases. */
 export function logWhereClause(
-  alias: string,
+  ownerExpr: string,
+  timeExpr: string,
   user: ScopeUser,
   filter: LogFilter | undefined,
   params: unknown[]
@@ -24,15 +27,15 @@ export function logWhereClause(
   const conds: string[] = [];
   if (user.role !== "admin") {
     params.push(user.id);
-    conds.push(`${alias}.user_id = $${params.length}`);
+    conds.push(`${ownerExpr} = $${params.length}`);
   }
   if (filter?.days != null && filter.days > 0) {
     params.push(filter.days);
-    conds.push(`${alias}.created_at >= now() - ($${params.length} * interval '1 day')`);
+    conds.push(`${timeExpr} >= now() - ($${params.length} * interval '1 day')`);
   }
   if (filter?.date) {
     params.push(filter.date);
-    conds.push(`(${alias}.created_at AT TIME ZONE 'Asia/Shanghai')::date = $${params.length}::date`);
+    conds.push(`(${timeExpr} AT TIME ZONE 'Asia/Shanghai')::date = $${params.length}::date`);
   }
   return conds.length ? ` WHERE ${conds.join(" AND ")}` : "";
 }
@@ -232,7 +235,7 @@ export async function listSearchLogs(
   filter?: LogFilter
 ): Promise<SearchLogRow[]> {
   const params: unknown[] = [];
-  const where = logWhereClause("s", user, filter, params);
+  const where = logWhereClause("s.user_id", "s.created_at", user, filter, params);
   const { rows } = await query<SearchLogRow>(
     `SELECT s.id, s.query, s.source, s.mode, s.result_count, s.total, s.took_ms, s.created_at,
             u.username
@@ -270,7 +273,7 @@ export async function listLlmCalls(
   filter?: LogFilter
 ): Promise<LlmCallRow[]> {
   const params: unknown[] = [];
-  const where = logWhereClause("l", user, filter, params);
+  const where = logWhereClause("l.user_id", "l.created_at", user, filter, params);
   const { rows } = await query<LlmCallRow>(
     `SELECT l.id, l.kind, l.purpose, l.model, l.input_chars, l.prompt_tokens,
             l.completion_tokens, l.took_ms, l.ok, l.error, l.created_at,

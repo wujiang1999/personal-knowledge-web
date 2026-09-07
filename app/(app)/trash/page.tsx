@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/requireUser";
+import { CollapsibleSection } from "@/components/collapsible-section";
 import { listTrash } from "@/lib/concepts";
 import { EmptyTrashButton, PurgeConceptButton, RestoreConceptButton } from "@/components/concept-action-buttons";
 
@@ -21,20 +22,13 @@ export default async function TrashPage() {
         <EmptyTrashButton disabled={items.length === 0} />
       </div>
 
-      <details className="group rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-        <summary className="flex cursor-pointer select-none items-center justify-between px-4 py-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
-          <span>
-            已删除条目 · {items.length} 条
-            {items.length > 0 && (
-              <span className="ml-2 text-xs font-normal text-zinc-400 dark:text-zinc-500">
-                最新删除 {new Date(items[0].deleted_at).toLocaleString("zh-CN")}
-              </span>
-            )}
-          </span>
-          <span className="text-xs text-zinc-500 group-open:hidden dark:text-zinc-400">点击展开</span>
-          <span className="hidden text-xs text-zinc-500 group-open:inline dark:text-zinc-400">点击收起</span>
-        </summary>
-        {items.length === 0 ? (
+<CollapsibleSection
+        title="已删除条目"
+        count={items.length}
+        newest={items[0]?.deleted_at ?? null}
+        newestLabel="最新删除"
+      >
+{items.length === 0 ? (
           <p className="px-4 py-10 text-center text-sm text-zinc-400 dark:text-zinc-500">回收站是空的</p>
         ) : (
           <ul className="divide-y border-t border-zinc-100 dark:divide-zinc-800 dark:border-zinc-800">
@@ -60,7 +54,7 @@ export default async function TrashPage() {
             ))}
           </ul>
         )}
-      </details>
+      </CollapsibleSection>
     </div>
   );
 }

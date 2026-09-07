@@ -5,7 +5,7 @@ import type { ScopeUser } from "./requireUser";
 import { conceptRowsForIds, hasSemanticSearch, rerankWithSemantic, semanticCandidates } from "./semantic";
 import { llmEmbed } from "./llm";
 import { BM25_B, BM25_K1, DEPRECATED_FACTOR, tokenizeQuery } from "./bm25";
-import { logRetrievalHits, logSearch } from "./logs";
+import { logRetrievalHits, logSearch, logWhereClause, type LogFilter } from "./logs";
 import { operatorFilterClauses, parseSearchQuery } from "./search-syntax";
 
 /** Thrown when a concept lookup by id finds no row (typed 404, not string-match). */
@@ -1086,14 +1086,22 @@ export interface Source {
   created_at: string;
 }
 
-export async function listSources(user: ScopeUser): Promise<Source[]> {
+/** Newest source records, owner-scoped (admin sees all). Same optional time
+ * filter as the /logs tables; ownership lives on concepts (owner_id) while
+ * the timestamp lives on sources — hence the two separate expressions. */
+export async function listSources(
+  user: ScopeUser,
+  filter?: LogFilter
+): Promise<Source[]> {
+  const params: unknown[] = [];
+  const where = logWhereClause("c.owner_id", "s.created_at", user, filter, params);
   const { rows } = await query<Source>(
     `SELECT s.id, s.source_type, s.original_name, s.content_hash, s.created_at
      FROM sources s
      JOIN concepts c ON c.id = s.concept_id
-     ${user.role === "admin" ? "" : "WHERE c.owner_id = $1"}
+     ${where}
      ORDER BY s.created_at DESC LIMIT 200`,
-    user.role === "admin" ? [] : [user.id]
+    params
   );
   return rows;
 }
