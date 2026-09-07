@@ -2,6 +2,41 @@ import { z } from "zod";
 import { query } from "./db";
 import type { ScopeUser } from "./requireUser";
 
+
+/** Time-window filter for the /logs tables. `days` = rolling window of the
+ * last N days; `date` = a single calendar day (YYYY-MM-DD, Beijing time, to
+ * match the zh-CN timestamps the page renders). `date` wins when both are
+ * given. Values are validated by the caller (the /logs page). */
+export interface LogFilter {
+  days?: number;
+  date?: string;
+}
+
+/** Build the WHERE clause shared by listSearchLogs/listLlmCalls: owner scope
+ * for non-admins + the optional time filter. Appends bound params to `params`
+ * and returns "" or " WHERE ..." — the column alias differs per table. */
+export function logWhereClause(
+  alias: string,
+  user: ScopeUser,
+  filter: LogFilter | undefined,
+  params: unknown[]
+): string {
+  const conds: string[] = [];
+  if (user.role !== "admin") {
+    params.push(user.id);
+    conds.push(`${alias}.user_id = $${params.length}`);
+  }
+  if (filter?.days != null && filter.days > 0) {
+    params.push(filter.days);
+    conds.push(`${alias}.created_at >= now() - ($${params.length} * interval '1 day')`);
+  }
+  if (filter?.date) {
+    params.push(filter.date);
+    conds.push(`(${alias}.created_at AT TIME ZONE 'Asia/Shanghai')::date = $${params.length}::date`);
+  }
+  return conds.length ? ` WHERE ${conds.join(" AND ")}` : "";
+}
+
 /** Usage logs: search queries (search_logs) + LLM/embedding calls (llm_calls),
  * rendered on /logs. All writers are fire-and-forget — logging must never
  * slow or fail the primary flow, so every insert swallows its own error into
@@ -189,17 +224,24 @@ export interface SearchLogRow {
   username: string | null;
 }
 
-/** Newest search queries, owner-scoped (admin sees all). */
-export async function listSearchLogs(user: ScopeUser, limit = 100): Promise<SearchLogRow[]> {
+/** Newest search queries, owner-scoped (admin sees all). Optional time
+ * filter (rolling days window or a single Beijing calendar day). */
+export async function listSearchLogs(
+  user: ScopeUser,
+  limit = 100,
+  filter?: LogFilter
+): Promise<SearchLogRow[]> {
+  const params: unknown[] = [];
+  const where = logWhereClause("s", user, filter, params);
   const { rows } = await query<SearchLogRow>(
     `SELECT s.id, s.query, s.source, s.mode, s.result_count, s.total, s.took_ms, s.created_at,
             u.username
      FROM search_logs s
      LEFT JOIN users u ON u.id = s.user_id
-     ${user.role === "admin" ? "" : "WHERE s.user_id = $1"}
+     ${where}
      ORDER BY s.created_at DESC
      LIMIT ${Math.max(1, Math.min(500, limit))}`,
-    user.role === "admin" ? [] : [user.id]
+    params
   );
   return rows;
 }
@@ -220,18 +262,25 @@ export interface LlmCallRow {
 }
 
 /** Newest LLM/embedding calls, owner-scoped (admin sees all; null-user rows
- * are system/script calls visible to admins only). */
-export async function listLlmCalls(user: ScopeUser, limit = 100): Promise<LlmCallRow[]> {
+ * are system/script calls visible to admins only). Same optional time filter
+ * as listSearchLogs. */
+export async function listLlmCalls(
+  user: ScopeUser,
+  limit = 100,
+  filter?: LogFilter
+): Promise<LlmCallRow[]> {
+  const params: unknown[] = [];
+  const where = logWhereClause("l", user, filter, params);
   const { rows } = await query<LlmCallRow>(
     `SELECT l.id, l.kind, l.purpose, l.model, l.input_chars, l.prompt_tokens,
             l.completion_tokens, l.took_ms, l.ok, l.error, l.created_at,
             u.username
      FROM llm_calls l
      LEFT JOIN users u ON u.id = l.user_id
-     ${user.role === "admin" ? "" : "WHERE l.user_id = $1"}
+     ${where}
      ORDER BY l.created_at DESC
      LIMIT ${Math.max(1, Math.min(500, limit))}`,
-    user.role === "admin" ? [] : [user.id]
+    params
   );
   return rows;
 }

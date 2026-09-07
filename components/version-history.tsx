@@ -28,6 +28,9 @@ export function VersionHistory({
   const router = useRouter();
   const [diffFor, setDiffFor] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  // 版本可以累积到几十条：默认只展开最近几条，其余「显示全部」一键展开。
+  const [showAll, setShowAll] = useState(false);
+  const COLLAPSED_COUNT = 5;
   const current = versions.find((v) => v.version_number === currentVersion);
 
   async function rollback(n: number) {
@@ -54,44 +57,56 @@ export function VersionHistory({
     }
   }
 
+  const visible = showAll ? versions : versions.slice(0, COLLAPSED_COUNT);
+  const hiddenCount = versions.length - visible.length;
   return (
-    <ul className="divide-y rounded-lg border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
-      {versions.map((v) => (
-        <li key={v.id} className="px-4 py-2 text-sm">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="font-mono">v{v.version_number}</span>
-            {v.version_number === currentVersion && (
-              <span className="text-xs text-green-600 dark:text-green-400">当前</span>
+    <div className="space-y-2">
+      <ul className="divide-y rounded-lg border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
+        {visible.map((v) => (
+          <li key={v.id} className="px-4 py-2 text-sm">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="font-mono">v{v.version_number}</span>
+              {v.version_number === currentVersion && (
+                <span className="text-xs text-green-600 dark:text-green-400">当前</span>
+              )}
+              <span className="text-zinc-500 dark:text-zinc-400">{new Date(v.created_at).toLocaleString("zh-CN")}</span>
+              <span className="text-xs text-zinc-400 dark:text-zinc-500">{v.content_hash.slice(7, 19)}</span>
+              {v.generated_by && <span className="text-xs text-zinc-400 dark:text-zinc-500">{v.generated_by}</span>}
+              <span className="ml-auto flex items-center gap-2">
+                {v.version_number !== currentVersion && current && (
+                  <button
+                    onClick={() => setDiffFor(diffFor === v.version_number ? null : v.version_number)}
+                    className="text-xs text-zinc-500 hover:text-zinc-800 hover:underline dark:text-zinc-400 dark:hover:text-zinc-100"
+                  >
+                    {diffFor === v.version_number ? "收起对比" : "对比当前"}
+                  </button>
+                )}
+                {v.version_number !== currentVersion && (
+                  <button
+                    onClick={() => rollback(v.version_number)}
+                    disabled={busy}
+                    className="text-xs text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400"
+                  >
+                    回滚到此版本
+                  </button>
+                )}
+              </span>
+            </div>
+            {diffFor === v.version_number && current && (
+              <DiffView oldVersion={v.version_number} currentVersion={currentVersion} lines={diffLines(v.body_markdown, current.body_markdown)} />
             )}
-            <span className="text-zinc-500 dark:text-zinc-400">{new Date(v.created_at).toLocaleString("zh-CN")}</span>
-            <span className="text-xs text-zinc-400 dark:text-zinc-500">{v.content_hash.slice(7, 19)}</span>
-            {v.generated_by && <span className="text-xs text-zinc-400 dark:text-zinc-500">{v.generated_by}</span>}
-            <span className="ml-auto flex items-center gap-2">
-              {v.version_number !== currentVersion && current && (
-                <button
-                  onClick={() => setDiffFor(diffFor === v.version_number ? null : v.version_number)}
-                  className="text-xs text-zinc-500 hover:text-zinc-800 hover:underline dark:text-zinc-400 dark:hover:text-zinc-100"
-                >
-                  {diffFor === v.version_number ? "收起对比" : "对比当前"}
-                </button>
-              )}
-              {v.version_number !== currentVersion && (
-                <button
-                  onClick={() => rollback(v.version_number)}
-                  disabled={busy}
-                  className="text-xs text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400"
-                >
-                  回滚到此版本
-                </button>
-              )}
-            </span>
-          </div>
-          {diffFor === v.version_number && current && (
-            <DiffView oldVersion={v.version_number} currentVersion={currentVersion} lines={diffLines(v.body_markdown, current.body_markdown)} />
-          )}
-        </li>
-      ))}
-    </ul>
+          </li>
+        ))}
+      </ul>
+      {hiddenCount > 0 && (
+        <button
+          onClick={() => setShowAll(true)}
+          className="w-full rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+        >
+          显示全部 {versions.length} 条版本（还有 {hiddenCount} 条更早的）
+        </button>
+      )}
+    </div>
   );
 }
 
