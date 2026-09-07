@@ -138,6 +138,26 @@ export async function listConcepts(opts: {
   return rows;
 }
 
+/** Total concept count with the same owner/category scope as listConcepts —
+ * feeds the knowledge list pager (共 N 条 / 共 Y 页). */
+export async function countConcepts(user: ScopeUser, category?: string): Promise<number> {
+  const params: unknown[] = [];
+  const where: string[] = ["c.deleted_at IS NULL"];
+  if (user.role !== "admin") {
+    params.push(user.id);
+    where.push(`c.owner_id = $${params.length}`);
+  }
+  if (category) {
+    params.push(category);
+    where.push(`(c.category = $${params.length} OR c.category LIKE $${params.length} || '/%')`);
+  }
+  const { rows } = await query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM concepts c WHERE ${where.join(" AND ")}`,
+    params
+  );
+  return rows[0]?.n ?? 0;
+}
+
 export interface CategoryTreeNode {
   name: string;
   path: string;

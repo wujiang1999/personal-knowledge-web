@@ -1,46 +1,81 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/requireUser";
-import { listConcepts, searchConcepts } from "@/lib/concepts";
+import { countConcepts, listConcepts, searchConcepts, type Concept } from "@/lib/concepts";
 
-const PAGE_SIZE = 20;
+/** Page-size options for the knowledge list (selectable per request via the
+ * `per` searchParam; 20 keeps URL cleanup when unset). */
+const PER_OPTIONS = [20, 50, 100];
+const DATELESS = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Pager items: all page numbers when the list is short, otherwise a window
+ * around the current page with the first/last pinned ("1 … 4 5 6 … 12"). */
+function pagerItems(page: number, totalPages: number): (number | "…")[] {
+  if (totalPages <= 15) {
+    return Array.from({ length: totalPages }, (_, i) => i + 1);
+  }
+  const items: (number | "…")[] = [1];
+  const lo = Math.max(2, page - 1);
+  const hi = Math.min(totalPages - 1, page + 1);
+  if (lo > 2) items.push("…");
+  for (let p = lo; p <= hi; p++) items.push(p);
+  if (hi < totalPages - 1) items.push("…");
+  items.push(totalPages);
+  return items;
+}
 
 export default async function KnowledgePage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; category?: string; page?: string }>;
+  searchParams: Promise<{ q?: string; category?: string; page?: string; per?: string }>;
 }) {
   const user = await requireUser();
-  const { q, category, page: pageParam } = await searchParams;
+  const { q, category, page: pageParam, per: perParam } = await searchParams;
   const query = q?.trim();
   const page = Math.max(1, Number(pageParam) || 1);
+  const per = PER_OPTIONS.includes(Number(perParam)) ? Number(perParam) : PER_OPTIONS[0];
 
-  let results: (Awaited<ReturnType<typeof listConcepts>>[number] & { body_markdown?: string })[];
+  let results: (Concept & { body_markdown?: string })[];
   let total: number | null = null;
   let hasMore = false;
   if (query) {
     // Ranked search, paginated the same way as the list view; the query also
     // returns the total match count for the pager.
-    const { results: r, total: t } = await searchConcepts(user, query, PAGE_SIZE, (page - 1) * PAGE_SIZE, "ui");
+    const { results: r, total: t } = await searchConcepts(user, query, per, (page - 1) * per, "ui");
     results = r;
     total = t;
-    hasMore = page * PAGE_SIZE < t;
+    hasMore = page * per < t;
   } else {
-    // Fetch one extra row to detect "has more", then slice to the page.
+    // Fetch one extra row to detect "has more", then slice to the page; the
+    // pager needs the exact total, which countConcepts provides cheaply.
     const fetched = await listConcepts({
       user,
       category: category?.trim() || undefined,
-      limit: PAGE_SIZE + 1,
-      offset: (page - 1) * PAGE_SIZE,
+      limit: per + 1,
+      offset: (page - 1) * per,
     });
-    hasMore = fetched.length > PAGE_SIZE;
-    results = fetched.slice(0, PAGE_SIZE);
+    hasMore = fetched.length > per;
+    results = fetched.slice(0, per);
   }
+  if (total === null) {
+    total = await countConcepts(user, category?.trim() || undefined);
+  }
+  const totalPages = Math.max(1, Math.ceil(total / per));
 
   const hrefFor = (p: number) => {
     const sp = new URLSearchParams();
     if (query) sp.set("q", query);
     if (category) sp.set("category", category);
+    if (per !== PER_OPTIONS[0]) sp.set("per", String(per));
     if (p > 1) sp.set("page", String(p));
+    const s = sp.toString();
+    return s ? `/knowledge?${s}` : "/knowledge";
+  };
+
+  const perHref = (option: number) => {
+    const sp = new URLSearchParams();
+    if (query) sp.set("q", query);
+    if (category) sp.set("category", category);
+    if (option !== PER_OPTIONS[0]) sp.set("per", String(option));
     const s = sp.toString();
     return s ? `/knowledge?${s}` : "/knowledge";
   };
@@ -50,6 +85,7 @@ export default async function KnowledgePage({
       <div className="flex items-center justify-between gap-4">
         <form method="get" action="/knowledge" className="flex flex-1 gap-2">
           {category && <input type="hidden" name="category" value={category} />}
+          {per !== PER_OPTIONS[0] && <input type="hidden" name="per" value={per} />}
           <input
             name="q"
             defaultValue={query ?? ""}
@@ -81,18 +117,36 @@ export default async function KnowledgePage({
 
       {query && (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          “{query}” 的搜索结果：{total ?? results.length} 条{(total ?? 0) > 0 && ` · 第 ${page} 页`}
+          “{query}” 的搜索结果：{total ?? results.length} 条 · 共 {totalPages} 页
         </p>
       )}
       {!query && category && (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          📁 目录：<span className="font-medium text-zinc-800 dark:text-zinc-100">{category}</span>
-          <span className="ml-1">（本页 {results.length} 条）</span>
-          <Link href="/knowledge" className="ml-2 underline">
-            清除
-          </Link>
+          目录 {category}：共 {total} 条 · 共 {totalPages} 页
         </p>
       )}
+      {!query && !category && (
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          共 {total} 条 · 共 {totalPages} 页
+        </p>
+      )}
+
+      <div className="flex flex-wrap items-center gap-1 text-sm">
+        <span className="mr-1 text-zinc-500 dark:text-zinc-400">每页条数</span>
+        {PER_OPTIONS.map((option) => (
+          <Link
+            key={option}
+            href={perHref(option)}
+            className={`rounded-md px-3 py-1.5 ${
+              option === per
+                ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            }`}
+          >
+            {option}
+          </Link>
+        ))}
+      </div>
 
       <ul className="divide-y rounded-lg border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
         {results.length === 0 && (
@@ -125,8 +179,8 @@ export default async function KnowledgePage({
                 )}
               </div>
               {c.description && <p className="mt-0.5 text-sm text-zinc-500 line-clamp-1 dark:text-zinc-400">{c.description}</p>}
-              {"body_markdown" in c && (
-                <p className="mt-1 text-sm text-zinc-400 line-clamp-2 dark:text-zinc-500">{(c as { body_markdown: string }).body_markdown}</p>
+              {c.body_markdown && (
+                <p className="mt-1 text-sm text-zinc-400 line-clamp-2 dark:text-zinc-500">{c.body_markdown}</p>
               )}
             </Link>
           </li>
@@ -134,9 +188,11 @@ export default async function KnowledgePage({
       </ul>
 
       {(page > 1 || hasMore) && (
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-zinc-500 dark:text-zinc-400">第 {page} 页</span>
-          <div className="flex gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+          <span className="text-zinc-500 dark:text-zinc-400">
+            第 {page} / {totalPages} 页
+          </span>
+          <div className="flex flex-wrap items-center gap-1">
             {page > 1 && (
               <Link
                 href={hrefFor(page - 1)}
@@ -144,6 +200,25 @@ export default async function KnowledgePage({
               >
                 ← 上一页
               </Link>
+            )}
+            {pagerItems(page, totalPages).map((p, i) =>
+              p === "…" ? (
+                <span key={`gap-${i}`} className="px-1 text-zinc-400 dark:text-zinc-500">
+                  …
+                </span>
+              ) : p === page ? (
+                <span key={p} className="rounded-md bg-zinc-900 px-3 py-1.5 text-white dark:bg-zinc-100 dark:text-zinc-900">
+                  {p}
+                </span>
+              ) : (
+                <Link
+                  key={p}
+                  href={hrefFor(p)}
+                  className="rounded-md border border-zinc-300 px-3 py-1.5 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  {p}
+                </Link>
+              )
             )}
             {hasMore && (
               <Link
