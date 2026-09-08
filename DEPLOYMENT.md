@@ -28,6 +28,9 @@
 
 ## 部署流程
 
+MCP 客户端 `personal-wiki` 的注册迁移、独立三端同步路径及验证流程见
+[personal-wiki MCP integration](docs/personal-wiki-mcp.md)。
+
 1. 本地开发、提交（`npm run check` = typecheck + lint + test）。
 2. 代码以**审核后的 git bundle** 方式传到服务器，更新 `/opt/personal-knowledge-web` 检出
    （服务器脚本刻意不直接从 GitHub 拉取）。
