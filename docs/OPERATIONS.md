@@ -12,7 +12,7 @@ build if a release step fails.
 
 `personal-knowledge-web-backup.timer` creates a daily local backup of the
 PostgreSQL database, attachments, checked-out Git bundle, and checksums in
-`/var/backups/personal-knowledge-web/`; it retains 14 days. Check the most
+`/var/backups/personal-knowledge-web/`; it retains 30 days (`RETENTION_DAYS` in the backup script). Check the most
 recent job with `sudo systemctl status personal-knowledge-web-backup.service`.
 
 Use a new, empty PostgreSQL database for restore rehearsal. Validate its dump

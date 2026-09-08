@@ -2,6 +2,8 @@
 
 个人知识库 Web 应用 —— 基于 OKF v0.2（Open Knowledge Format）交换格式的最小可用版本（MVP）。
 
+架构说明（模块/数据模型/API/关键机制的现状描述，随代码演进维护）见 `docs/ARCHITECTURE.md`；部署与变更历史见 `DEPLOYMENT.md`。
+
 对应《设计方案.txt》的「三层架构」中，本仓库实现的是 **Web 层**（Next.js）与 **运行时知识层**（自建 PostgreSQL + 全文检索）的最小集合。原始资料层、向量检索（pgvector）、冲突审核、LLM 原子化、Vercel Workflows 等留待后续阶段。
 
 ## 技术栈
@@ -168,7 +170,7 @@ NEW_USERNAME=alice NEW_PASSWORD=xxx RESET=1 npm run db:add-user
 
 ## 备份与恢复
 
-个人知识库最重要的运维动作。服务器已配置 systemd 定时备份 `personal-knowledge-web-backup.timer`：每日备份 PostgreSQL 数据库、附件、代码 git bundle 与 SHA256 校验和到 `/var/backups/personal-knowledge-web/`，保留 14 天。
+个人知识库最重要的运维动作。服务器已配置 systemd 定时备份 `personal-knowledge-web-backup.timer`：每日备份 PostgreSQL 数据库、附件、代码 git bundle 与 SHA256 校验和到 `/var/backups/personal-knowledge-web/`，保留 30 天（以 `server/backup.sh` 的 `RETENTION_DAYS` 为准）。
 
 ```bash
 sudo systemctl status personal-knowledge-web-backup.service   # 查看最近一次备份

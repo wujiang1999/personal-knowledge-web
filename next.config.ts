@@ -10,7 +10,7 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     const isProd = process.env.NODE_ENV === "production";
-    // NOTE: X-Frame-Options and CSP frame-ancestors are set in middleware.ts
+    // NOTE: X-Frame-Options and CSP frame-ancestors are set in proxy.ts
     // instead — they must be per-path so the /api/attachments/:id response can
     // be framed by our own PDF preview <iframe> (frame-ancestors 'self'),
     // while pages still get clickjacking protection (DENY / 'none').
