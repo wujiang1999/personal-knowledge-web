@@ -43,9 +43,9 @@ MCP 客户端（Claude/Codex，personal-wiki）──Bearer pkb_…──► htt
 
 | 层 | 位置 | 职责 |
 |---|---|---|
-| 页面 | `app/(app)/` | 12 个 Server Component 页面：dashboard / knowledge（列表+详情+新建）/ sources / logs / trash / reviews / settings / users / stats / graph；另有 `/login` |
-| 客户端组件 | `components/`（22 个） | 表单、CodeMirror 编辑器、目录树、图谱（ECharts 动态导入）、快速切换器、版本历史、附件面板、账户控制台等 |
-| API | `app/api/`（28 个 route.ts） | 全部 JSON 接口；除 `/api/health` 外每个 handler 都过 `withRoute` + `requireApiUser` |
+| 页面 | `app/(app)/` | 13 个 Server Component 页面：dashboard / knowledge（列表+详情+新建）/ ask / sources / logs / trash / reviews / settings / users / stats / graph；另有 `/login` |
+| 客户端组件 | `components/`（23 个） | 表单、CodeMirror 编辑器、目录树、图谱（ECharts 动态导入）、快速切换器、版本历史、附件面板、账户控制台等 |
+| API | `app/api/`（31 个 route.ts） | 全部 JSON 接口；除 `/api/health` 外每个 handler 都过 `withRoute` + `requireApiUser` |
 | 领域库 | `lib/`（26 个模块） | CRUD/检索/鉴权/LLM/日志/导出等全部业务逻辑，页面与 API 共同复用 |
 | 数据 | `db/schema.sql` + `db/migrations/0001–0017` | 幂等基线 schema + 编号迁移 |
 | 运维脚本 | `scripts/`（11 个） | migrate / seed / add-user / create-api-key / ingest / review / curate / embed-backfill / audit-attachments / smoke-production / load-env |
@@ -67,6 +67,7 @@ MCP 客户端（Claude/Codex，personal-wiki）──Bearer pkb_…──► htt
 | `attachments` | 附件元数据 | `storage_key`（服务端生成的磁盘文件名）、mime/size/hash；字节在磁盘 |
 | `api_keys` | 机器凭证 | `key_hash`（SHA-256 of `pkb_`+48hex），明文仅创建时返回一次；`revoked_at` |
 | `folders` | 空文件夹实体 | `(owner_id, path)` 唯一；可见树 = folders ∪ `concepts.category` 派生 |
+| `tasks` | 异步任务（迁移 0019） | `owner_id`、`kind`（ask）、`status`（queued/running/done/failed）、`payload`/`result` jsonb、`error`、`attempts`、`started_at`/`finished_at`；**执行租约**：超期未结束的任务在读取时被判 failed（无 worker 的单实例取舍） |
 | `review_items` | 审核队列（迁移 0018） | `owner_id`、`kind`（conflict/near_duplicate）、`source`（ingest/okf-import/mcp/api）、`status`、`payload` jsonb（候选全文）、`content_hash`、`target_concept_id`（ON DELETE SET NULL）+ `target_title` 快照、`similarity`/`score`/`reason`、`resolved_action`/`resolved_concept_id`/`resolved_at`；待裁决集合按 (owner, 目标, 哈希) 去重 |
 | `search_logs` / `llm_calls` | 用量记录（/logs） | 均带 `api_key_id` 归因列；llm_calls 记录 kind/purpose/model/tokens/成败 |
 | `request_log` | 流量日志（/stats） | 每个 API 响应一行（route/method/path/status/took_ms）；插入端 2% 概率清理 180 天前旧行 |
@@ -157,6 +158,9 @@ BM25 + embedding 混合，五级降级链，任何一级失败都退化而不是
 | `/api/trash` | GET, DELETE | 回收站列表 / 清空 |
 | `/api/reviews` | GET, POST | 审核队列列表（`?status=pending|resolved`）/ 入队（MCP 等进程外写路径用） |
 | `/api/reviews/[id]/resolve` | POST | 裁决：`action=kept_old|adopted_new|merged|kept_both`，写入走不可变版本路径 |
+| `/api/ask` | POST | 知识问答入队（同一问题在飞行中则复用该任务），返回任务 id（202） |
+| `/api/tasks` | GET | 任务历史（`?kind=&limit=&offset=`，owner 作用域） |
+| `/api/tasks/[id]` | GET | 单任务轮询：`queued|running|done|failed` + 结果 |
 | `/api/categories` | GET, POST | 文件夹树 / `op=create|rename|move|delete`（冲突 409） |
 | `/api/sources` | GET | 原始输入留痕 |
 | `/api/capture` | POST | 快速捕获（首行成标题、默认目录 `捕获/`、status=draft；故意无 GET 防 key 进访问日志） |
@@ -183,6 +187,7 @@ BM25 + embedding 混合，五级降级链，任何一级失败都退化而不是
 | `search-embed` | 每次检索（与 BM25 并行） | 输入截 4000 字；失败 → 纯词法 |
 | `ingest-atomize` | `npm run ingest -- file.md [--write]` | 标题面包屑分块（≤2800 字符）→ LLM 原子化 → 查重（score≥25 或标题全同跳过）→ `generated_by=llm:ingest:<model>`；块级并发池 `INGEST_CONCURRENCY` 默认 4 |
 | `weekly-review` | `npm run review [--write]` | 近 N 天变更分组 + LLM 叙事 → 「每周回顾」条目（重跑出新版本） |
+| `ask` | `POST /api/ask`（网页 /ask、MCP `kb_ask`） | 检索 top-k → 只依据资料作答 → `[n]` 引用解析成条目 id；`maxTokens:1200`、thinking 默认关；检索为空直接回「没检索到」不烧配额 |
 | `backfill` | `npm run db:embed-backfill` | 全量向量化 + 钉维度 + HNSW，幂等可重跑 |
 | `chat` | 供 MCP judge 等远端使用（经 `/api/logs/llm` 上报） | — |
 
@@ -222,7 +227,7 @@ BM25 + embedding 混合，五级降级链，任何一级失败都退化而不是
   迁移文件、不进基线 schema**（基线先于迁移执行，`CREATE TABLE IF NOT EXISTS` 对老库 no-op）——
   加列时沿用此惯例。
 - 基座为「Web 层 + 运行时知识层」最小集；原方案中的 **冲突审核**已落地（`review_items` + `/reviews`，2026-09-10），Claim 抽取仍未实现。
-- 单实例约束（个人规模权衡）：搜索缓存、登录限流、语义探测均为**进程内状态**，多实例部署需先外置（throttle 模块注释已声明）。
+- 单实例约束（个人规模权衡）：搜索缓存、登录限流、语义探测、**异步任务的执行者**均为**进程内状态**，多实例部署需先外置（`lib/throttle`、`lib/tasks` 注释已声明）。
 - pgvector/pgroonga 由超级用户带外安装（迁移 NOTICE 跳过 + 脚本后补 schema），部署脚本不装扩展。
 - 附件在本地磁盘 → 迁 Vercel/对象存储是 README 已声明的前提变更。
 - 旧版 `middleware.ts` 约定在 Next 16 下更名为 `proxy.ts`（`next.config.ts` 里一处指向旧文件名的

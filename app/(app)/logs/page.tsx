@@ -27,6 +27,7 @@ const PURPOSE_LABEL: Record<string, string> = {
   "ingest-atomize": "录入原子化",
   backfill: "向量回填",
   judge: "查重判别",
+  ask: "知识问答",
   chat: "对话",
   embed: "向量化",
 };

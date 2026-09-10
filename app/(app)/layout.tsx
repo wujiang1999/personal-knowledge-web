@@ -9,6 +9,7 @@ const baseLinks = [
   { href: "/dashboard", label: "概览" },
   { href: "/knowledge", label: "知识" },
   { href: "/graph", label: "图谱" },
+  { href: "/ask", label: "问答" },
   { href: "/sources", label: "来源" },
   { href: "/stats", label: "统计" },
   { href: "/logs", label: "记录" },
@@ -25,9 +26,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const withBadges = baseLinks.map((l) =>
     l.href === "/reviews" ? { ...l, badge: pendingReviews } : l
   );
+  // 「账户」插在最后一项（设置）之前：用 slice(0, -1) 而不是硬编码下标，
+  // 新增导航项时不必再回来改这里。
   const links =
     user.role === "admin"
-      ? [...withBadges.slice(0, 8), { href: "/users", label: "账户" }, ...withBadges.slice(8)]
+      ? [...withBadges.slice(0, -1), { href: "/users", label: "账户" }, ...withBadges.slice(-1)]
       : withBadges;
 
   return (

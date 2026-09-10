@@ -38,6 +38,19 @@ into the server checkout.
   caches successful identities across probes or server instances.
 - All 18 existing tools and their input contracts are retained.
 
+## v0.10.0 — RAG ask + judge speedup (2026-09-10)
+
+- New tool `kb_ask {question, k?}`: the server retrieves top-k with the same
+  hybrid search as `kb_search`, answers **only from those documents**, and
+  returns `citations` mapping each `[n]` marker back to a concept id. The tool
+  waits server-side (5-30s typical, 75s cap); a timeout returns `taskId`
+  instead of dropping the answer, which stays in the task history.
+- Judge calls now send `thinking: {type: "disabled"}` with a three-step retry
+  ladder (JSON+no-thinking → no-thinking → plain). Measured on the live KB:
+  4.0s / 1024 reasoning tokens → 0.6s / 40 completion tokens per judgement,
+  with unchanged verdicts on the regression set.
+- Tool count 21 → 22; `scripts/smoke.mjs` asserts the new count.
+
 ## v0.9.0 — review queue (2026-09-10)
 
 The knowledge API gained two routes — `GET/POST /api/reviews` and
