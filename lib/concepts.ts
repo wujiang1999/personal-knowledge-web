@@ -1143,6 +1143,9 @@ export interface ExportConcept {
 }
 
 export async function listConceptsForExport(user: ScopeUser): Promise<ExportConcept[]> {
+  // 回收站必须排除：导出=有效知识快照、图谱=可见条目、导入查重=现存的可见条目，
+  // 三者共用的这份读取面此前漏了 deleted_at 过滤（2026-09-10 实测：导出包里
+  // 混着一条已删除条目，导入还会把撞上它的内容误判成「重复」而静默跳过）。
   const { rows } = await query<ExportConcept>(`
     SELECT
       c.id, c.type, c.title, c.description, c.category, c.status, c.tags,
@@ -1151,7 +1154,8 @@ export async function listConceptsForExport(user: ScopeUser): Promise<ExportConc
     FROM concepts c
     JOIN concept_versions v
       ON v.concept_id = c.id AND v.version_number = c.current_version
-    ${user.role === "admin" ? "" : "WHERE c.owner_id = $1"}
+    WHERE c.deleted_at IS NULL
+    ${user.role === "admin" ? "" : "AND c.owner_id = $1"}
     ORDER BY c.updated_at DESC
   `, user.role === "admin" ? [] : [user.id]);
   return rows;

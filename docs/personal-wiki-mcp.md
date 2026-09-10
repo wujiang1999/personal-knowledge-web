@@ -52,7 +52,8 @@ enqueue the *full* candidate body, so the decision has a durable home.
   verdict — the agent must then hand the body back to the user.
 - New tools: `kb_list_reviews` (read-only, `status=pending|resolved`) and
   `kb_resolve_review` (`kept_old` / `adopted_new` / `merged` / `kept_both`).
-  Tool count 18 → 20; `scripts/smoke.mjs` asserts the new count.
+  Tool count 19 → 21 (`kb_upload_attachment`, added in v0.8.0, had left the
+  smoke assertion at 18 — this release repairs that stale count too).
 - Resolutions go through the existing immutable-version write paths
   (`addConceptVersion` / `createConcept`), so every decision is itself revertible
   from the version history.
