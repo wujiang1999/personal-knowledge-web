@@ -48,7 +48,7 @@ MCP 客户端（Claude/Codex，personal-wiki）──Bearer pkb_…──► htt
 | API | `app/api/`（31 个 route.ts） | 全部 JSON 接口；除 `/api/health` 外每个 handler 都过 `withRoute` + `requireApiUser` |
 | 领域库 | `lib/`（26 个模块） | CRUD/检索/鉴权/LLM/日志/导出等全部业务逻辑，页面与 API 共同复用 |
 | 数据 | `db/schema.sql` + `db/migrations/0001–0017` | 幂等基线 schema + 编号迁移 |
-| 运维脚本 | `scripts/`（11 个） | migrate / seed / add-user / create-api-key / ingest / review / curate / embed-backfill / audit-attachments / smoke-production / load-env |
+| 运维脚本 | `scripts/`（12 个） | migrate / seed / add-user / create-api-key / ingest / review / curate / claims / embed-backfill / audit-attachments / smoke-production / load-env |
 | 服务器侧纳管 | `server/`、`offsite/`、`Caddyfile`、`deploy.sh` | systemd 单元 drop-in、备份/恢复演练/告警脚本、异地拉取、Caddy 权威快照 —— 详见 DEPLOYMENT.md 目录映射 |
 
 `lib` 内部依赖方向单向：路由/页面 → `lib/concepts|users|stats|…` → `lib/db|config|logs|llm|semantic`，
@@ -68,7 +68,7 @@ MCP 客户端（Claude/Codex，personal-wiki）──Bearer pkb_…──► htt
 | `api_keys` | 机器凭证 | `key_hash`（SHA-256 of `pkb_`+48hex），明文仅创建时返回一次；`revoked_at` |
 | `folders` | 空文件夹实体 | `(owner_id, path)` 唯一；可见树 = folders ∪ `concepts.category` 派生 |
 | `tasks` | 异步任务（迁移 0019） | `owner_id`、`kind`（ask / resummarize）、`status`（queued/running/done/failed）、`payload`/`result` jsonb、`error`、`attempts`、`started_at`/`finished_at`；**执行租约**：超期未结束的任务在读取时被判 failed（无 worker 的单实例取舍） |
-| `review_items` | 审核队列（迁移 0018） | `owner_id`、`kind`（conflict/near_duplicate）、`source`（ingest/okf-import/mcp/api）、`status`、`payload` jsonb（候选全文）、`content_hash`、`target_concept_id`（ON DELETE SET NULL）+ `target_title` 快照、`similarity`/`score`/`reason`、`resolved_action`/`resolved_concept_id`/`resolved_at`；待裁决集合按 (owner, 目标, 哈希) 去重 |
+| `review_items` | 审核队列（迁移 0018） | `owner_id`、`kind`（conflict/near_duplicate）、`source`（ingest/okf-import/mcp/api/claims）、`status`、`payload` jsonb（候选全文）、`content_hash`、`target_concept_id`（ON DELETE SET NULL）+ `target_title` 快照、`similarity`/`score`/`reason`、`resolved_action`/`resolved_concept_id`/`resolved_at`；待裁决集合按 (owner, 目标, 哈希) 去重 |
 | `search_logs` / `llm_calls` | 用量记录（/logs） | 均带 `api_key_id` 归因列；llm_calls 记录 kind/purpose/model/tokens/成败 |
 | `request_log` | 流量日志（/stats） | 每个 API 响应一行（route/method/path/status/took_ms）；插入端 2% 概率清理 180 天前旧行 |
 | `concept_embeddings` | 语义向量（迁移 0013） | `PRIMARY KEY(concept_id)`、`content_hash`+`model`（陈旧判定）、`vector` 维度在首次 backfill 时钉死并建 HNSW（cosine）索引；pgvector 缺失时迁移 NOTICE 跳过、不失败 |
@@ -187,6 +187,7 @@ BM25 + embedding 混合，五级降级链，任何一级失败都退化而不是
 | `auto-summary` | 创建/新版本且 description 为空 | fire-and-forget；`maxTokens:200`、thinking 默认关（0.18s vs 16.4s 实测）；绝不覆盖人工描述 |
 | `search-embed` | 每次检索（与 BM25 并行） | 输入截 4000 字；失败 → 纯词法 |
 | `ingest-atomize` | `npm run ingest -- file.md [--write]` | 标题面包屑分块（≤2800 字符）→ LLM 原子化 → 查重（score≥25 或标题全同跳过）→ `generated_by=llm:ingest:<model>`；块级并发池 `INGEST_CONCURRENCY` 默认 4 |
+| `claims` | `npm run claims [--write]` | 主张抽取 + 矛盾判定（每条主张 1 次判定调用，无相关候选则跳过）；`--write` 时把矛盾作为 conflict 入审核队列，dry-run 只出报告 |
 | `weekly-review` | `npm run review [--write]` | 近 N 天变更分组 + LLM 叙事 → 「每周回顾」条目（重跑出新版本） |
 | `resummarize` | `/settings`「维护」按钮（`POST /api/tasks`） | 批量补齐缺描述的条目：复用 `auto-summary` 的提示与写入路径（`purpose=auto-summary`），每条落一次进度；人工描述不覆盖、上限 50 条/次 |
 | `ask` | `POST /api/ask`（网页 /ask、MCP `kb_ask`） | 检索 top-k → 只依据资料作答 → `[n]` 引用解析成条目 id；`maxTokens:1200`、thinking 默认关；检索为空直接回「没检索到」不烧配额 |

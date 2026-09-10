@@ -19,6 +19,7 @@
     "ingest": "tsx scripts/ingest.ts",
     "review": "tsx scripts/review.ts",
     "curate": "tsx scripts/curate.ts",
+    "claims": "tsx scripts/claims.ts",
     "db:embed-backfill": "tsx scripts/embed-backfill.ts",
     "smoke:prod": "node scripts/smoke-production.mjs"
   },

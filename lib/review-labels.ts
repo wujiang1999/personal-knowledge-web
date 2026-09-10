@@ -22,4 +22,5 @@ export const REVIEW_SOURCE_LABEL: Record<string, string> = {
   "okf-import": "OKF 导入",
   mcp: "Agent 写入",
   api: "API",
+  claims: "Claim 审计",
 };

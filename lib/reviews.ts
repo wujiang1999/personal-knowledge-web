@@ -21,7 +21,7 @@ export const REVIEW_KINDS = ["conflict", "near_duplicate"] as const;
 export type ReviewKind = (typeof REVIEW_KINDS)[number];
 
 /** 谁把它放进队列——报告文案与排查都靠它。 */
-export const REVIEW_SOURCES = ["ingest", "okf-import", "mcp", "api"] as const;
+export const REVIEW_SOURCES = ["ingest", "okf-import", "mcp", "api", "claims"] as const;
 export type ReviewSource = (typeof REVIEW_SOURCES)[number];
 
 export const REVIEW_ACTIONS = ["kept_old", "adopted_new", "merged", "kept_both"] as const;
