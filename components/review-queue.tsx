@@ -5,26 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { diffLines } from "@/lib/diff";
 import { DiffView } from "@/components/diff-view";
-
-/** 审核队列的四种裁决动作——标签在这一处定义，裁决历史页头也用同一份。 */
-export const REVIEW_ACTION_LABEL: Record<string, string> = {
-  kept_old: "保留旧内容",
-  adopted_new: "采用新内容",
-  merged: "合并",
-  kept_both: "分别保留",
-};
-
-export const REVIEW_KIND_LABEL: Record<string, string> = {
-  conflict: "事实冲突",
-  near_duplicate: "近似重复",
-};
-
-export const REVIEW_SOURCE_LABEL: Record<string, string> = {
-  ingest: "ingest",
-  "okf-import": "OKF 导入",
-  mcp: "Agent 写入",
-  api: "API",
-};
+import { REVIEW_ACTION_LABEL, REVIEW_KIND_LABEL, REVIEW_SOURCE_LABEL } from "@/lib/review-labels";
 
 /** 一条待裁决记录在客户端的形态：两份正文 + 服务端算好的合并草稿。
  * 草稿由服务端给出而不是客户端拼接，合并规则因此只有一处定义。 */

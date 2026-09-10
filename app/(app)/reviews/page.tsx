@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { CollapsibleSection } from "@/components/collapsible-section";
-import { ReviewQueue, REVIEW_ACTION_LABEL, REVIEW_SOURCE_LABEL, type ReviewCardItem } from "@/components/review-queue";
+import { ReviewQueue, type ReviewCardItem } from "@/components/review-queue";
+import { REVIEW_ACTION_LABEL, REVIEW_SOURCE_LABEL } from "@/lib/review-labels";
 import { requireUser } from "@/lib/requireUser";
 import { countReviewItems, listReviewItems, mergeDraft } from "@/lib/reviews";
 
