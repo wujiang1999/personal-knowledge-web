@@ -61,6 +61,19 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 ## 变更历史
 
+- 2026-09-10（DeepSeek 模型名更名同步，无代码改动）：`GET https://api.deepseek.com/models` 现仅列
+  `deepseek-flash` 与 `deepseek-v4-pro`——旧名 `deepseek-v4-flash`（及 `deepseek-v4.1-flash-expires-on-0910`）
+  已从模型列表移除，仅作兼容别名（实测仍返回 200，但响应体回填 `"model":"deepseek-flash"`），
+  故全量切到现名。**四处配置同步改名**：① 服务器 `/opt/personal-knowledge-web/.env` 的 `LLM_MODEL`
+  （改前备份 `/opt/personal-knowledge-web/.env.bak-20260910164700`，`diff` 确认仅该行变化、其余键不变，
+  随后 `systemctl restart personal-knowledge-web`）；② MCP 客户端 env `KB_LLM_MODEL` 三处——
+  `~/.omp/agent/mcp.json`、`~/.codex/config.toml`、`~/.claude.json`（MCP 无热加载，新会话生效）。
+  `LLM_EMBEDDING_MODEL=text-embedding-v4`（DashScope）不受影响。**线上验收**：服务端 auto-summary
+  触发一次真实调用（临时建条目 → 描述回填成功 → 条目彻底删除），`llm_calls` 记录
+  `llm|auto-summary|deepseek-flash|ok|667ms|176→51 tokens`；MCP judge 全链路（`/api/search` →
+  候选全文读取 → LLM 判别 → `POST /api/logs/llm` 落库）记录 `llm|judge|deepseek-flash|ok|3591ms|4492→1024`，
+  返回值正常（verdict/reason/mergedBody 齐全，无规则降级 note）。本地 `deployment/sjtuai.art/.env`
+  为 gitignore 的开发占位（仅 `DATABASE_URL`），不含 LLM 配置，无需同步。
 - 2026-09-06（多账户管理批次）：把此前只能 SSH CLI 完成的账户运维搬进网页后台。**① 迁移 0017**——
   `users` 增 `disabled_at`（软禁用）与 `last_login_at`（登录路由记录）。**② 禁用三链路即时生效**——
   登录 403（「该账号已被管理员禁用」，且记一次失败供限流）；`requireUser`/`requireApiUser` 对禁用账号
@@ -218,7 +231,8 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
   lib 助手（行为不变）。部署后端到端验证：手工铸造 tv 过期 Cookie 访问 /dashboard，链路
   /dashboard → /api/auth/expire → /login 全部按预期，登录表单可达。
 - 2026-09-04（晚间，LLM 调用耗时优化）：/logs 实测定位——`auto-summary` 一次 16.4s（输入仅 178 字符，
-  completion 2263 tokens）：`deepseek-v4-flash` **默认开启 thinking**，为"≤120 字摘要"白烧推理 tokens；
+  completion 2263 tokens）：`deepseek-v4-flash`（2026-09-10 更名 `deepseek-flash`，见变更历史首条）
+  **默认开启 thinking**，为"≤120 字摘要"白烧推理 tokens；
   全链路无 `max_tokens` 上限。服务器直压对照：同任务关 thinking + 限长 200 → **0.18s**（≈90×）。
   网络面：首尔 → api.deepseek.com TTFB 固定 0.2-0.5s；embedding 走 DashScope 中国区跨境 0.17-0.9s
   （国际版端点 TTFB 减半但需国际版 key，现有 CN key 401，暂不换）。优化：**① `llmChatJsonWith` 支持
