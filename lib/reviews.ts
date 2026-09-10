@@ -226,27 +226,32 @@ export async function listReviewItems(
 ): Promise<ReviewItem[]> {
   const limit = Math.min(Math.max(1, Math.trunc(opts.limit ?? 50)), 200);
   const offset = Math.max(0, Math.trunc(opts.offset ?? 0));
-  const scope = user.role === "admin" ? "" : "AND r.owner_id = $1";
+  // 与 /logs、/stats 同一套 owner 作用域写法：admin 的空子句必须连参数一起
+  // 消失——留着不引用的 $n 会让 PG 报 42P18（could not determine data type）。
+  const scope = user.role === "admin" ? "" : "AND r.owner_id = $4";
+  const scopeParams = user.role === "admin" ? [] : [user.id];
   const order = opts.status === "pending" ? "r.created_at DESC" : "r.resolved_at DESC NULLS LAST";
   const { rows } = await query<ReviewRow>(
-    `${SELECT_ITEM} WHERE r.status = $2 ${scope} ORDER BY ${order} LIMIT $3 OFFSET $4`,
-    [user.id, opts.status, limit, offset]
+    `${SELECT_ITEM} WHERE r.status = $1 ${scope} ORDER BY ${order} LIMIT $2 OFFSET $3`,
+    [opts.status, limit, offset, ...scopeParams]
   );
   return rows.map(toItem);
 }
 
 export async function countReviewItems(user: ScopeUser, status: ReviewStatus): Promise<number> {
-  const scope = user.role === "admin" ? "" : "AND owner_id = $1";
+  const scope = user.role === "admin" ? "" : "AND owner_id = $2";
+  const scopeParams = user.role === "admin" ? [] : [user.id];
   const { rows } = await query<{ n: string }>(
-    `SELECT count(*)::text AS n FROM review_items WHERE status = $2 ${scope}`,
-    [user.id, status]
+    `SELECT count(*)::text AS n FROM review_items WHERE status = $1 ${scope}`,
+    [status, ...scopeParams]
   );
   return Number(rows[0]?.n ?? 0);
 }
 
 export async function getReviewItem(id: string, user: ScopeUser): Promise<ReviewItem | null> {
   const scope = user.role === "admin" ? "" : "AND r.owner_id = $2";
-  const { rows } = await query<ReviewRow>(`${SELECT_ITEM} WHERE r.id = $1 ${scope}`, [user.id, id]);
+  const scopeParams = user.role === "admin" ? [] : [user.id];
+  const { rows } = await query<ReviewRow>(`${SELECT_ITEM} WHERE r.id = $1 ${scope}`, [id, ...scopeParams]);
   return rows.length ? toItem(rows[0]) : null;
 }
 
