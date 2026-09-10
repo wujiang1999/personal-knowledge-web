@@ -45,10 +45,16 @@ into the server checkout.
   returns `citations` mapping each `[n]` marker back to a concept id. The tool
   waits server-side (5-30s typical, 75s cap); a timeout returns `taskId`
   instead of dropping the answer, which stays in the task history.
-- Judge calls now send `thinking: {type: "disabled"}` with a three-step retry
-  ladder (JSON+no-thinking → no-thinking → plain). Measured on the live KB:
-  4.0s / 1024 reasoning tokens → 0.6s / 40 completion tokens per judgement,
-  with unchanged verdicts on the regression set.
+- Judge calls now send `thinking: {type: "disabled"}` by default, with a
+  three-step retry ladder (JSON+no-thinking → no-thinking → plain). Measured
+  against the live endpoint on identical input: short verdicts (ok/conflict)
+  1.1-2.0s / 80-264 completion tokens with thinking on vs 0.6-1.0s / 24-54
+  with it off — and 6.2-6.8s → 0.9-1.0s on a verdict-only A/B prompt. Merge
+  verdicts stay ~6.3-6.7s either way: that cost is writing `mergedBody`.
+  Verdicts on the regression set (duplicate → merge, unrelated → ok, same
+  topic/different content → conflict) are identical in both modes.
+  `KB_LLM_THINKING=on` restores the provider default (a thinner prompt once
+  flipped merge → ok without reasoning, so the escape hatch is documented).
 - Tool count 21 → 22; `scripts/smoke.mjs` asserts the new count.
 
 ## v0.9.0 — review queue (2026-09-10)
