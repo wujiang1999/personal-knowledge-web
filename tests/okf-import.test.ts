@@ -17,11 +17,22 @@ describe("isConceptFile", () => {
 });
 
 describe("stripExportHeading", () => {
-  it("removes the exported H1 and following blanks", () => {
-    expect(stripExportHeading("\n# 标题\n\n正文第一行\n", "标题")).toBe("正文第一行\n");
+  it("removes exactly the exporter's wrapper", () => {
+    expect(stripExportHeading("\n# 标题\n\n正文第一行\n", "标题")).toBe("正文第一行");
+    expect(stripExportHeading("\n# 标题\n\n正文第一行\n\n", "标题")).toBe("正文第一行\n");
+    expect(stripExportHeading("\n# 标题\n\n正文\n", "标题")).toBe("正文");
   });
   it("keeps bodies whose first line is not the exported H1", () => {
     expect(stripExportHeading("# 别的\n", "标题")).toBe("# 别的\n");
+  });
+  it("round-trips any stored body byte-exactly (the 2026-09-10 false-conflict bug)", () => {
+    // 导出器写 `# {title}\n\n{body}\n`;只要去掉的"包装"多一个字节,
+    // content_hash 就不再相等,恢复导入会把每条都判成同名异内容。
+    const exported = (title: string, body: string) =>
+      `---\ntitle: ${title}\ntype: Note\nstatus: stable\n---\n\n# ${title}\n\n${body}\n`;
+    for (const body of ["正文", "正文\n", "正文\n\n", "一\n\n二", "  缩进\n结尾  ", "# 非标题首行"]) {
+      expect(stripExportHeading(exported("T", body).replace(/^[\s\S]*?---\n\n/, ""), "T")).toBe(body);
+    }
   });
 });
 
@@ -39,7 +50,7 @@ describe("parseOkfMarkdown", () => {
       tags: ["ops"],
       status: "stable",
     });
-    expect(doc!.body).toBe("1. 第一步\n2. 第二步\n");
+    expect(doc!.body).toBe("1. 第一步\n2. 第二步");
     expect(doc!.body).not.toContain("# 部署流程");
     expect(doc!.body).not.toContain("id: abc");
   });

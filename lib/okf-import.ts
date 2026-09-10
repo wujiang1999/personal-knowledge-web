@@ -36,17 +36,22 @@ export function isConceptFile(path: string): boolean {
   return base !== "index.md" && base !== "log.md";
 }
 
-/** Strip the exported `# {title}` H1 (and surrounding blanks) so the round-trip
- * body matches what the user originally saved, not our own export decoration. */
+/** Strip the exported `# {title}` H1 wrapper so a round trip is byte-exact.
+ *
+ * The exporter emits `\n\n# {title}\n\n{body}\n`, so the inverse removes
+ * exactly that decoration: one leading blank line, the H1, one blank line and
+ * one trailing newline. Nothing else is normalized — an earlier version also
+ * trimmed the body and re-appended a newline, which silently changed every
+ * body that did not already end with one and turned restore-imports into a
+ * wall of false "same title, different content" conflicts (2026-09-10). */
 export function stripExportHeading(body: string, title: string): string {
-  const lines = body.replace(/^\r?\n/, "").split("\n");
-  const first = (lines[0] ?? "").trim();
-  if (first === `# ${title.trim()}`) {
-    lines.shift();
-    while (lines.length > 0 && lines[0].trim() === "") lines.shift();
-    return lines.join("\n").replace(/\s+$/, "") + (lines.length ? "\n" : "");
-  }
-  return body;
+  const lead = body.startsWith("\r\n") ? 2 : body.startsWith("\n") ? 1 : 0;
+  const lines = body.slice(lead).split("\n");
+  if ((lines[0] ?? "").trim() !== `# ${title.trim()}`) return body;
+  lines.shift();
+  if ((lines[0] ?? "").trim() === "") lines.shift(); // the exporter's single blank line
+  const out = lines.join("\n");
+  return out.endsWith("\n") ? out.slice(0, -1) : out; // the exporter's single trailing newline
 }
 
 /** Parse one exported Markdown file into a concept-shaped doc, or a per-file
@@ -79,7 +84,7 @@ export function parseOkfMarkdown(path: string, content: string): { doc?: ParsedO
   if (!body.trim()) return { error: "正文为空" };
 
   return {
-    doc: { path, title, type, description, category, tags, status, body: body.trim() + "\n" },
+    doc: { path, title, type, description, category, tags, status, body },
   };
 }
 
