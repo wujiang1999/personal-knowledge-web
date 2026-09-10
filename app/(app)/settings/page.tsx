@@ -3,10 +3,15 @@ import { listApiKeys } from "@/lib/apiKey";
 import { ChangePasswordForm } from "@/components/change-password-form";
 import { ApiKeysPanel } from "@/components/api-keys";
 import { OkfImportForm } from "@/components/okf-import-form";
+import { ResummarizeButton } from "@/components/resummarize-button";
+import { countMissingDescriptions } from "@/lib/summary";
 
 export default async function SettingsPage() {
   const user = await requireUser();
-  const apiKeys = await listApiKeys(user.id);
+  const [apiKeys, missingDescriptions] = await Promise.all([
+    listApiKeys(user.id),
+    countMissingDescriptions(user),
+  ]);
 
   return (
     <div className="space-y-8">
@@ -27,6 +32,15 @@ export default async function SettingsPage() {
           明文只在生成时显示一次，服务器只存哈希；吊销立即生效。被禁用账号的密钥全部自动失效。
         </p>
         <ApiKeysPanel initial={apiKeys} />
+      </section>
+
+      <section className="rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
+        <h2 className="mb-2 font-medium">维护</h2>
+        <p className="mb-3 text-sm text-zinc-500 dark:text-zinc-400">
+          批量补齐<b>没有描述</b>的条目（每条一次 LLM 调用，单次最多 50 条）。人工写过的描述永远不会被覆盖；
+          任务在服务端后台执行，进度可在本页看到，刷新不丢。
+        </p>
+        <ResummarizeButton missing={missingDescriptions} />
       </section>
 
       <section className="rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">

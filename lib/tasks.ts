@@ -11,7 +11,7 @@ import type { ScopeUser } from "./requireUser";
  *  · 本批不自动重试（见迁移注释的取舍）。
  * 租约清理挂在读取路径上（getTask/listTasks 先清后读），没有定时器。 */
 
-export const TASK_KINDS = ["ask"] as const;
+export const TASK_KINDS = ["ask", "resummarize"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 
 export const TASK_STATUSES = ["queued", "running", "done", "failed"] as const;
@@ -106,6 +106,14 @@ export async function claimTask(id: string): Promise<boolean> {
     [id]
   );
   return (rowCount ?? 0) > 0;
+}
+
+/** 执行途中刷新 result（进度），状态保持 running——客户端据此显示 x/y。 */
+export async function progressTask(id: string, result: unknown): Promise<void> {
+  await query("UPDATE tasks SET result = $2::jsonb WHERE id = $1 AND status = 'running'", [
+    id,
+    JSON.stringify(result),
+  ]);
 }
 
 export async function finishTask(id: string, result: unknown): Promise<void> {

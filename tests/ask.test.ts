@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAskMessages, parseAskAnswer, type AskSource } from "../lib/ask";
+import { ASK_MIN_SCORE, ASK_MIN_SIMILARITY, buildAskMessages, isRetrievalTooWeak, parseAskAnswer, type AskSource } from "../lib/ask";
 
 const src = (id: string, title: string, text = "正文"): AskSource => ({
   id,
@@ -65,5 +65,22 @@ describe("parseAskAnswer", () => {
     expect(() => parseAskAnswer({ answer: "   " }, sources)).toThrow(/未返回答案/);
     expect(() => parseAskAnswer({}, sources)).toThrow(/未返回答案/);
     expect(() => parseAskAnswer(null, sources)).toThrow(/未返回答案/);
+  });
+});
+
+describe("isRetrievalTooWeak（弱候选短路，阈值按线上标定）", () => {
+  const hit = (score: number, similarity: number | null): AskSource => ({ ...src("a", "t"), score, similarity });
+
+  it("judges by similarity on the semantic path", () => {
+    expect(isRetrievalTooWeak(hit(100, 0.12))).toBe(true);   // 无关题（语义兜底命中）
+    expect(isRetrievalTooWeak(hit(100, 0.16))).toBe(true);
+    expect(isRetrievalTooWeak(hit(4, 0.34))).toBe(false);    // 相关题，词法分不高但语义够近
+    expect(isRetrievalTooWeak(hit(100, ASK_MIN_SIMILARITY))).toBe(false); // 等于门槛：放行
+  });
+
+  it("falls back to the lexical score when the row carries no similarity", () => {
+    expect(isRetrievalTooWeak(hit(3.68, null))).toBe(true);  // 无关题（纯词法）
+    expect(isRetrievalTooWeak(hit(8.26, null))).toBe(false); // 相关题（纯词法）
+    expect(isRetrievalTooWeak(hit(ASK_MIN_SCORE, null))).toBe(false);
   });
 });

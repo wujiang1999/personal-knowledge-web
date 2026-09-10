@@ -2,15 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { pollTask } from "@/lib/task-poll";
 
 /** 提问框 + 轮询。答案由服务端任务行承载：这里只负责提交、盯着任务状态、
  * 完成后让服务端重新渲染（答案的 Markdown 由 ConceptBody 在服务端渲染，
  * 与条目正文同一套渲染路径，客户端不引 markdown 库）。 */
-
-interface PolledTask {
-  status: string;
-  error: string | null;
-}
 
 const POLL_INTERVAL_MS = 1200;
 /** 60 次 × 1.2s ≈ 72 秒：够一次 5-30 秒的合成，也不至于让页面无限等。 */
@@ -25,13 +21,6 @@ export function AskPanel() {
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  async function readTask(id: string): Promise<PolledTask> {
-    const res = await fetch(`/api/tasks/${id}`);
-    const data = (await res.json().catch(() => ({}))) as { task?: PolledTask; error?: string };
-    if (!res.ok || !data.task) throw new Error(data.error ?? `读取任务失败（HTTP ${res.status}）`);
-    return data.task;
-  }
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -51,19 +40,20 @@ export function AskPanel() {
         setError(data.error ?? `提问失败（HTTP ${res.status}）`);
         return;
       }
-      setStage("正在依据检索结果生成答案…");
-      for (let i = 0; i < POLL_ATTEMPTS; i++) {
-        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-        const task = await readTask(data.id);
-        if (task.status === "done") {
-          setQuestion("");
-          router.refresh();
-          return;
-        }
-        if (task.status === "failed") {
-          setError(task.error ?? "生成失败");
-          return;
-        }
+      setStage("正在检索知识库…");
+      const task = await pollTask(data.id, {
+        intervalMs: POLL_INTERVAL_MS,
+        maxAttempts: POLL_ATTEMPTS,
+        onTick: (t) => setStage(t.status === "queued" ? "排队中…" : "正在依据检索结果生成答案…"),
+      });
+      if (task.status === "done") {
+        setQuestion("");
+        router.refresh();
+        return;
+      }
+      if (task.status === "failed") {
+        setError(task.error ?? "生成失败");
+        return;
       }
       setError("生成超时：任务仍在后台执行，稍后刷新本页即可看到答案");
     } catch (err) {

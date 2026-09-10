@@ -57,6 +57,16 @@ into the server checkout.
   flipped merge → ok without reasoning, so the escape hatch is documented).
 - Tool count 21 → 22; `scripts/smoke.mjs` asserts the new count.
 
+## Web-only maintenance endpoint (2026-09-10, MCP unchanged)
+
+`POST /api/tasks` enqueues batch maintenance jobs (`kind=resummarize`: fill in
+missing descriptions, ≤50 per run, progress in the task row). It is **not
+exposed as a tool on purpose** — same rationale as the account endpoints: it
+burns LLM quota across the whole library and is a human-driven maintenance
+action, not something an agent should trigger while answering a question. The
+MCP contract for reading task state is unchanged (`kb_ask` polls its own task
+server-side); the batch job is visible in the web UI only.
+
 ## v0.9.0 — review queue (2026-09-10)
 
 The knowledge API gained two routes — `GET/POST /api/reviews` and

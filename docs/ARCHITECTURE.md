@@ -67,7 +67,7 @@ MCP 客户端（Claude/Codex，personal-wiki）──Bearer pkb_…──► htt
 | `attachments` | 附件元数据 | `storage_key`（服务端生成的磁盘文件名）、mime/size/hash；字节在磁盘 |
 | `api_keys` | 机器凭证 | `key_hash`（SHA-256 of `pkb_`+48hex），明文仅创建时返回一次；`revoked_at` |
 | `folders` | 空文件夹实体 | `(owner_id, path)` 唯一；可见树 = folders ∪ `concepts.category` 派生 |
-| `tasks` | 异步任务（迁移 0019） | `owner_id`、`kind`（ask）、`status`（queued/running/done/failed）、`payload`/`result` jsonb、`error`、`attempts`、`started_at`/`finished_at`；**执行租约**：超期未结束的任务在读取时被判 failed（无 worker 的单实例取舍） |
+| `tasks` | 异步任务（迁移 0019） | `owner_id`、`kind`（ask / resummarize）、`status`（queued/running/done/failed）、`payload`/`result` jsonb、`error`、`attempts`、`started_at`/`finished_at`；**执行租约**：超期未结束的任务在读取时被判 failed（无 worker 的单实例取舍） |
 | `review_items` | 审核队列（迁移 0018） | `owner_id`、`kind`（conflict/near_duplicate）、`source`（ingest/okf-import/mcp/api）、`status`、`payload` jsonb（候选全文）、`content_hash`、`target_concept_id`（ON DELETE SET NULL）+ `target_title` 快照、`similarity`/`score`/`reason`、`resolved_action`/`resolved_concept_id`/`resolved_at`；待裁决集合按 (owner, 目标, 哈希) 去重 |
 | `search_logs` / `llm_calls` | 用量记录（/logs） | 均带 `api_key_id` 归因列；llm_calls 记录 kind/purpose/model/tokens/成败 |
 | `request_log` | 流量日志（/stats） | 每个 API 响应一行（route/method/path/status/took_ms）；插入端 2% 概率清理 180 天前旧行 |
@@ -159,7 +159,8 @@ BM25 + embedding 混合，五级降级链，任何一级失败都退化而不是
 | `/api/reviews` | GET, POST | 审核队列列表（`?status=pending|resolved`）/ 入队（MCP 等进程外写路径用） |
 | `/api/reviews/[id]/resolve` | POST | 裁决：`action=kept_old|adopted_new|merged|kept_both`，写入走不可变版本路径 |
 | `/api/ask` | POST | 知识问答入队（同一问题在飞行中则复用该任务），返回任务 id（202） |
-| `/api/tasks` | GET | 任务历史（`?kind=&limit=&offset=`，owner 作用域） |
+| `/api/tasks` | POST | 批量维护任务入队（`kind=resummarize`，同类在飞行中则复用），返回任务 id（202） |
+| `/api/tasks` | GET | 任务历史（`?kind=&limit=&offset=`，owner 作用域；含运行中任务的进度 result） |
 | `/api/tasks/[id]` | GET | 单任务轮询：`queued|running|done|failed` + 结果 |
 | `/api/categories` | GET, POST | 文件夹树 / `op=create|rename|move|delete`（冲突 409） |
 | `/api/sources` | GET | 原始输入留痕 |
@@ -187,6 +188,7 @@ BM25 + embedding 混合，五级降级链，任何一级失败都退化而不是
 | `search-embed` | 每次检索（与 BM25 并行） | 输入截 4000 字；失败 → 纯词法 |
 | `ingest-atomize` | `npm run ingest -- file.md [--write]` | 标题面包屑分块（≤2800 字符）→ LLM 原子化 → 查重（score≥25 或标题全同跳过）→ `generated_by=llm:ingest:<model>`；块级并发池 `INGEST_CONCURRENCY` 默认 4 |
 | `weekly-review` | `npm run review [--write]` | 近 N 天变更分组 + LLM 叙事 → 「每周回顾」条目（重跑出新版本） |
+| `resummarize` | `/settings`「维护」按钮（`POST /api/tasks`） | 批量补齐缺描述的条目：复用 `auto-summary` 的提示与写入路径（`purpose=auto-summary`），每条落一次进度；人工描述不覆盖、上限 50 条/次 |
 | `ask` | `POST /api/ask`（网页 /ask、MCP `kb_ask`） | 检索 top-k → 只依据资料作答 → `[n]` 引用解析成条目 id；`maxTokens:1200`、thinking 默认关；检索为空直接回「没检索到」不烧配额 |
 | `backfill` | `npm run db:embed-backfill` | 全量向量化 + 钉维度 + HNSW，幂等可重跑 |
 | `chat` | 供 MCP judge 等远端使用（经 `/api/logs/llm` 上报） | — |
@@ -218,6 +220,7 @@ BM25 + embedding 混合，五级降级链，任何一级失败都退化而不是
 | `LLM_EMBEDDING_BASE_URL/API_KEY/MODEL/DIMENSIONS` | 语义检索；前三个缺省回退 `LLM_*`，`DIMENSIONS` 必填（列/索引按它钉死） |
 | `SEARCH_CACHE_TTL_MS` / `SEARCH_CACHE_MAX` | 检索缓存 60s / 200 条 |
 | `CAPTURE_CATEGORY` | `/api/capture` 默认目录（缺省 `捕获`） |
+| `ASK_MIN_SIMILARITY` / `ASK_MIN_SCORE` | 问答弱候选门槛（0.25 / 5）：top-1 相似度低于前者、或纯词法命中低于后者时不调 LLM，直接回「关联太弱」；按 41 条库标定，语料量级变化后需重标 |
 | `INGEST_CONCURRENCY` | ingest 块级并发（默认 4） |
 
 ## 十、演进与已知约束

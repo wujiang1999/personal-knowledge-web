@@ -1,4 +1,6 @@
 import { isAutoSummaryEnabled, getLlmChatConfig } from "./config";
+import type { ScopeUser } from "./requireUser";
+import { claimTask, failTask, finishTask, progressTask } from "./tasks";
 import { query } from "./db";
 import { llmChatJson } from "./llm";
 import { invalidateSearchCache } from "./concepts";
@@ -18,11 +20,15 @@ export type SummaryOutcome =
 /**
  * Generate a one-line description for the concept's current version when it
  * has none. Human-written descriptions are never overwritten.
+ *
+ * The `LLM_AUTO_SUMMARY` switch deliberately lives in the *hook*
+ * (maybeQueueAutoSummary): it gates automatic spending after every save, not
+ * an explicit request — the manual "补齐缺失描述" batch goes through here
+ * regardless of that switch.
  */
 export async function generateSummaryForConcept(conceptId: string): Promise<SummaryOutcome> {
   const cfg = getLlmChatConfig();
   if (!cfg) return { status: "skipped", reason: "LLM 未配置" };
-  if (!isAutoSummaryEnabled()) return { status: "skipped", reason: "LLM_AUTO_SUMMARY 未开启" };
 
   const cur = await query<{ owner_id: string; title: string; description: string | null; body_markdown: string }>(
     `SELECT c.owner_id, c.title, c.description, v.body_markdown
@@ -76,4 +82,100 @@ export function maybeQueueAutoSummary(conceptId: string): void {
       err instanceof Error ? err.message : err
     );
   });
+}
+
+/** 批量补齐缺失描述的规模上限：一次任务的条目数（每条一次 LLM 调用）。 */
+export const RESUMARIZE_MAX_BATCH = 50;
+
+/** 缺描述的条目数——按钮文案与任务结果都要它（`npm run curate` 的同一信号）。 */
+export async function countMissingDescriptions(user: ScopeUser): Promise<number> {
+  const scope = user.role === "admin" ? "" : "AND c.owner_id = $1";
+  const scopeParams = user.role === "admin" ? [] : [user.id];
+  const { rows } = await query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM concepts c
+      WHERE c.deleted_at IS NULL AND coalesce(btrim(c.description), '') = '' ${scope}`,
+    scopeParams
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** 待补描述的条目（新的先来：近期录入的更可能是刚 ingest 进来的）。 */
+async function listMissingDescriptions(
+  user: ScopeUser,
+  limit: number
+): Promise<{ id: string; title: string }[]> {
+  const scope = user.role === "admin" ? "" : "AND owner_id = $2";
+  const scopeParams = user.role === "admin" ? [] : [user.id];
+  const { rows } = await query<{ id: string; title: string }>(
+    `SELECT id, title FROM concepts
+      WHERE deleted_at IS NULL AND coalesce(btrim(description), '') = '' ${scope}
+      ORDER BY updated_at DESC LIMIT $1`,
+    [limit, ...scopeParams]
+  );
+  return rows;
+}
+
+/** 批量任务的结果形态（进 tasks.result：进度与逐条明细）。 */
+export interface ResummarizeResult {
+  total: number;
+  done: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  finished: boolean;
+  items: { id: string; title: string; status: string; error?: string }[];
+  tookMs?: number;
+}
+
+/**
+ * 执行者：把「全库缺描述」逐条补齐，边跑边把进度写进任务行（客户端就是靠它
+ * 显示 x/y）。与问答任务同一套约定：进程内 fire-and-forget、不抛异常、异常
+ * 落进任务行；中途进程消失由 lib/tasks 的租约在下次读取时判失败。
+ */
+export async function executeResummarizeTask(
+  taskId: string,
+  user: ScopeUser,
+  limit: number
+): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    if (!(await claimTask(taskId))) return;
+    const targets = await listMissingDescriptions(user, Math.min(limit, RESUMARIZE_MAX_BATCH));
+    const result: ResummarizeResult = {
+      total: targets.length,
+      done: 0,
+      updated: 0,
+      skipped: 0,
+      failed: 0,
+      finished: false,
+      items: [],
+    };
+    await progressTask(taskId, result);
+    for (const target of targets) {
+      try {
+        const outcome = await generateSummaryForConcept(target.id);
+        if (outcome.status === "done") result.updated++;
+        else result.skipped++;
+        result.items.push({ id: target.id, title: target.title, status: outcome.status });
+      } catch (err) {
+        result.failed++;
+        result.items.push({
+          id: target.id,
+          title: target.title,
+          status: "failed",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      result.done++;
+      // 每条都落一次进度：批量最多 50 条，代价可忽略，换来刷新页面也不丢进度。
+      await progressTask(taskId, result);
+    }
+    result.finished = true;
+    result.tookMs = Date.now() - startedAt;
+    await finishTask(taskId, result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[summary] 批量补描述失败:", taskId, message);
+    await failTask(taskId, message).catch(() => {});
+  }
 }
