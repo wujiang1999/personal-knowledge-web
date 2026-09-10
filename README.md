@@ -4,7 +4,7 @@
 
 架构说明（模块/数据模型/API/关键机制的现状描述，随代码演进维护）见 `docs/ARCHITECTURE.md`；部署与变更历史见 `DEPLOYMENT.md`。
 
-对应《设计方案.txt》的「三层架构」中，本仓库实现的是 **Web 层**（Next.js）与 **运行时知识层**（自建 PostgreSQL + 全文检索）的最小集合。原始资料层、向量检索（pgvector）、冲突审核、LLM 原子化、Vercel Workflows 等留待后续阶段。
+对应《设计方案.txt》的「三层架构」中，本仓库实现的是 **Web 层**（Next.js）与 **运行时知识层**（自建 PostgreSQL + 全文检索）。原始资料层、Vercel Workflows 等留待后续阶段。
 
 ## 技术栈
 
@@ -27,6 +27,7 @@
 - 运营统计页（`/stats` + `GET /api/stats`）：流量概览（请求总数/成功率/P50/P95，request_log）、检索质量（零结果率/检索路径分布）、API key 用量归因（调用量/成功率/知识贡献）、高频被检索条目（concepts.retrieval_count，整理信号）、库健康（向量覆盖/陈旧向量/回收站/DB 体积/部署版本，仅管理员）
 - 账户管理（`/users` + `/api/users`，管理员）：创建账号（初始密码只显示一次）、重置密码、调整角色、禁用/启用——禁用立即生效（登录拒绝 + 会话作废 + 名下 API key 全部 401，数据保留可恢复），内置防自锁与「最后一名管理员」守卫；设置页自助 API 密钥管理（生成/吊销，明文仅显示一次）
 - 原始来源保留（每次录入的原始输入留存，用于可追溯与去重）
+- 审核队列（`/reviews` + `GET/POST /api/reviews` + `POST /api/reviews/[id]/resolve`）：写路径拦下的内容有持久去处——ingest 命中的近似重复、OKF 导入的同名异内容、MCP 判别出的 conflict / merge_suggestion 都会入队；四种裁决（保留旧 / 采用新 / 合并 / 分别保留）全部落在不可变版本上，导航栏带待办计数
 - OKF v0.2 Bundle 导出（`.okf/index.md`、`log.md`、按 type 分目录的概念 Markdown，ZIP 下载）
 - 双向引用：正文中 `[[条目标题]]` 渲染为可跳转链接，详情页附「被引用」反向链接面板
 - 写入时精确查重：创建内容与已有条目正文完全相同时返回 409 并指向原条目

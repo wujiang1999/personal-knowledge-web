@@ -61,6 +61,8 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 ## 变更历史
 
+- 2026-09-10（冲突审核队列批次：把「人工裁决」补成闭环）：规划里「重复/冲突治理」一直只有前半套——三处写路径都能*发现*相似与冲突，却没有一处能*安放*：ingest CLI 的近似重复跳过即遗忘、OKF 导入的冲突只活在一次性报告里、MCP 判出的 conflict 只回给 agent 一句话。内容被拦下就等于被丢弃，「留人工裁决」没有入口。本批补上后半套。**① 迁移 0018 `review_items`**——一行待裁决记录 = 候选全文（`payload` jsonb）+ 撞上的目标条目（`target_concept_id`，ON DELETE SET NULL + `target_title` 快照）+ 来源（ingest/okf-import/mcp/api）+ 判别信号（`similarity`/`score`/`reason`）；待裁决集合按 (owner, 目标, 正文哈希) 去重，重复 ingest 不会灌满队列（`.reviews` 里 WHERE NOT EXISTS 覆盖 NULL 目标，唯一部分索引兜住并发）。**② 三处入队**——ingest CLI 查重命中时入队（dry-run 仍零写入，只有 `--write` 才落记录）、OKF 导入的 conflict 分类入队并在报告里回带 `reviewId`、MCP 的 conflict/merge_suggestion 经新端点 `POST /api/reviews` 入队。**③ 四出口裁决**——`POST /api/reviews/[id]/resolve`：`kept_old` 只结案、`adopted_new`/`merged` 给目标条目生成新版本、`kept_both` 新建条目；全部走既有不可变写入路径（`addConceptVersion`/`createConcept`），先写库后落状态，裁决本身可再回滚。**④ `/reviews` 裁决台**——待裁决卡片带行级差异（抽出共用 `components/diff-view.tsx`，与版本对比同一套视觉）、合并草稿（旧正文 + `---` + 候选正文，人工删减后保存）、四种动作按钮；已裁决历史收在折叠面板；导航「审核」带待办计数徽标（`NavLinks` 增加可选 `badge`）。**⑤ MCP v0.9.0 同步**——新增 `kb_list_reviews`/`kb_resolve_review`，create/update 的 conflict/merge_suggestion 结果附带 `reviewId`（入队失败标 `reviewError`，绝不让裁决本身失败），工具数 18→20，README 工具参考与 Agent 守则同步。本地 `npm run check` 164 测试（新增 reviews 9）+ `npm run build` 通过；MCP 侧 typecheck + 84 测试通过。
+
 - 2026-09-10（DeepSeek 模型名更名同步，无代码改动）：`GET https://api.deepseek.com/models` 现仅列
   `deepseek-flash` 与 `deepseek-v4-pro`——旧名 `deepseek-v4-flash`（及 `deepseek-v4.1-flash-expires-on-0910`）
   已从模型列表移除，仅作兼容别名（实测仍返回 200，但响应体回填 `"model":"deepseek-flash"`），

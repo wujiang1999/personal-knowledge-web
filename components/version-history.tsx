@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { diffLines, type DiffLine } from "@/lib/diff";
+import { diffLines } from "@/lib/diff";
+import { DiffView } from "@/components/diff-view";
 
 interface VersionRow {
   id: string;
@@ -93,7 +94,17 @@ export function VersionHistory({
               </span>
             </div>
             {diffFor === v.version_number && current && (
-              <DiffView oldVersion={v.version_number} currentVersion={currentVersion} lines={diffLines(v.body_markdown, current.body_markdown)} />
+              <DiffView
+                heading={
+                  <>
+                    v{v.version_number} → 当前 v{currentVersion}（
+                    {diffLines(v.body_markdown, current.body_markdown).filter((l) => l.kind !== "same").length} 处差异）：
+                    <span className="text-red-600 dark:text-red-400"> − 为旧版内容（回滚会恢复）</span>，+
+                    为当前内容（回滚会移除）
+                  </>
+                }
+                lines={diffLines(v.body_markdown, current.body_markdown)}
+              />
             )}
           </li>
         ))}
@@ -106,44 +117,6 @@ export function VersionHistory({
           显示全部 {versions.length} 条版本（还有 {hiddenCount} 条更早的）
         </button>
       )}
-    </div>
-  );
-}
-
-function DiffView({
-  oldVersion,
-  currentVersion,
-  lines,
-}: {
-  oldVersion: number;
-  currentVersion: number;
-  lines: DiffLine[];
-}) {
-  const changes = lines.filter((l) => l.kind !== "same").length;
-  return (
-    <div className="mt-2 rounded border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-700 dark:bg-zinc-950">
-      <p className="mb-1 text-xs text-zinc-500 dark:text-zinc-400">
-        v{oldVersion} → 当前 v{currentVersion}（{changes} 处差异）：
-        <span className="text-red-600 dark:text-red-400"> − 为旧版内容（回滚会恢复）</span>，+
-        为当前内容（回滚会移除）
-      </p>
-      <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5">
-        {lines.map((l, i) => (
-          <div
-            key={i}
-            className={
-              l.kind === "add"
-                ? "bg-green-50 text-green-800 dark:bg-green-950/40 dark:text-green-300"
-                : l.kind === "del"
-                  ? "bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-300"
-                  : "text-zinc-500 dark:text-zinc-500"
-            }
-          >
-            {l.kind === "add" ? "+ " : l.kind === "del" ? "- " : "  "}
-            {l.text}
-          </div>
-        ))}
-      </pre>
     </div>
   );
 }

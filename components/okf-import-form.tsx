@@ -7,7 +7,7 @@ interface ImportReport {
   total: number;
   imported: { id: string; title: string }[];
   duplicates: { title: string; existingId: string; existingTitle: string }[];
-  conflicts: { title: string; existingId: string; existingTitle: string }[];
+  conflicts: { title: string; existingId: string; existingTitle: string; reviewId: string | null }[];
   errors: { path: string; error: string }[];
 }
 
@@ -94,14 +94,22 @@ export function OkfImportForm() {
           )}
           {report.conflicts.length > 0 && (
             <div>
-              <p className="font-medium text-amber-600 dark:text-amber-400">⚠️ 同名但内容不同，未导入（请人工裁决）</p>
+              <p className="font-medium text-amber-600 dark:text-amber-400">
+                ⚠️ 同名但内容不同，未导入（已进入
+                <a href="/reviews" className="mx-1 underline">
+                  审核队列
+                </a>
+                等待裁决）
+              </p>
               <ul className="mt-1 space-y-0.5 text-zinc-500 dark:text-zinc-400">
                 {report.conflicts.map((r) => (
                   <li key={r.existingId + r.title}>
                     <a href={`/knowledge/${r.existingId}`} className="hover:underline">
                       {r.title}
                     </a>
-                    <span className="ml-1">（已有条目内容不同，可打开后手动合并）</span>
+                    <span className="ml-1">
+                      （已有条目内容不同；到审核队列选「采用新内容 / 合并 / 分别保留 / 保留旧内容」）
+                    </span>
                   </li>
                 ))}
               </ul>

@@ -1,4 +1,5 @@
 import { requireUser } from "@/lib/requireUser";
+import { countReviewItems } from "@/lib/reviews";
 import { LogoutButton } from "@/components/logout-button";
 import { NavLinks } from "@/components/nav-links";
 import { QuickSwitcher } from "@/components/quick-switcher";
@@ -12,16 +13,22 @@ const baseLinks = [
   { href: "/stats", label: "统计" },
   { href: "/logs", label: "记录" },
   { href: "/trash", label: "回收站" },
+  { href: "/reviews", label: "审核" },
   { href: "/settings", label: "设置" },
 ];
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
+  // 待裁决数挂在导航上：队列没人知道就不会有人清（一次索引计数，代价可忽略）。
+  const pendingReviews = await countReviewItems(user, "pending");
   // 账户管理是管理员入口；普通用户不渲染也不可达（页面自身还有直接 URL 守卫）。
+  const withBadges = baseLinks.map((l) =>
+    l.href === "/reviews" ? { ...l, badge: pendingReviews } : l
+  );
   const links =
     user.role === "admin"
-      ? [...baseLinks.slice(0, 7), { href: "/users", label: "账户" }, baseLinks[7]]
-      : baseLinks;
+      ? [...withBadges.slice(0, 8), { href: "/users", label: "账户" }, ...withBadges.slice(8)]
+      : withBadges;
 
   return (
     <div className="flex min-h-screen flex-col">

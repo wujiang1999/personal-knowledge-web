@@ -1,12 +1,16 @@
 import JSZip from "jszip";
 import yaml from "js-yaml";
 import { createConcept, listConceptsForExport, sha256Hex, DuplicateBodyError } from "./concepts";
+import { enqueueReview } from "./reviews";
 import type { ScopeUser } from "./requireUser";
 
 /** OKF Bundle 导入：解析导出 ZIP（Markdown + YAML frontmatter），按规划的
  * 重复/冲突治理规则分类——完全重复复用已有条目（不重建），同名不同内容视为
  * 冲突留给人工裁决（绝不静默覆盖），其余创建为新条目。解析失败的文件进入
- * errors 报告，不阻塞其余文件（"解析失败不能显示成导入成功"）。 */
+ * errors 报告，不阻塞其余文件（"解析失败不能显示成导入成功"）。
+ *
+ * 冲突额外落一行审核队列记录：导入报告关掉浏览器就没了，队列不会——裁决
+ * 入口必须有持久形态（见 lib/reviews）。 */
 
 export const OKF_IMPORT_MAX_BYTES = 20 * 1024 * 1024;
 
@@ -123,7 +127,7 @@ export interface OkfImportReport {
   total: number;
   imported: { id: string; title: string }[];
   duplicates: { title: string; existingId: string; existingTitle: string }[];
-  conflicts: { title: string; existingId: string; existingTitle: string }[];
+  conflicts: { title: string; existingId: string; existingTitle: string; reviewId: string | null }[];
   errors: { path: string; error: string }[];
 }
 
@@ -147,7 +151,28 @@ export async function importOkfZip(user: ScopeUser & { username: string }, bytes
       continue;
     }
     if (decision.action === "conflict") {
-      report.conflicts.push({ title: doc.title, existingId: decision.existingId, existingTitle: decision.existingTitle });
+      const reviewId = await enqueueReview(user, {
+        kind: "conflict",
+        source: "okf-import",
+        payload: {
+          type: doc.type,
+          title: doc.title,
+          description: doc.description ?? undefined,
+          category: doc.category ?? undefined,
+          tags: doc.tags,
+          status: doc.status,
+          body: doc.body,
+        },
+        targetConceptId: decision.existingId,
+        targetTitle: decision.existingTitle,
+        reason: `导入文件 ${doc.path} 与已有条目同名、内容不同`,
+      });
+      report.conflicts.push({
+        title: doc.title,
+        existingId: decision.existingId,
+        existingTitle: decision.existingTitle,
+        reviewId,
+      });
       continue;
     }
     // createConcept re-checks byte-identical bodies inside its own transaction

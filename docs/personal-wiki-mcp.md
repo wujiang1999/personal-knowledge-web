@@ -38,6 +38,25 @@ into the server checkout.
   caches successful identities across probes or server instances.
 - All 18 existing tools and their input contracts are retained.
 
+## v0.9.0 — review queue (2026-09-10)
+
+The knowledge API gained two routes — `GET/POST /api/reviews` and
+`POST /api/reviews/[id]/resolve` — backing the new review queue (`/reviews`).
+Blocked writes are no longer dropped on the floor: `ingest` near-duplicates,
+OKF import conflicts, and MCP `conflict` / `merge_suggestion` verdicts all
+enqueue the *full* candidate body, so the decision has a durable home.
+
+- `kb_create_concept` / `kb_update_concept` now attach `reviewId` to the
+  `conflict` and `merge_suggestion` verdicts (the body is enqueued automatically).
+  A failed enqueue returns `reviewId:null` + `reviewError` instead of failing the
+  verdict — the agent must then hand the body back to the user.
+- New tools: `kb_list_reviews` (read-only, `status=pending|resolved`) and
+  `kb_resolve_review` (`kept_old` / `adopted_new` / `merged` / `kept_both`).
+  Tool count 18 → 20; `scripts/smoke.mjs` asserts the new count.
+- Resolutions go through the existing immutable-version write paths
+  (`addConceptVersion` / `createConcept`), so every decision is itself revertible
+  from the version history.
+
 Run `npm test`, `npm run typecheck`, and `npm run build` in the MCP repository.
 With credentials injected into the process environment, `npm run smoke` verifies
 the real stdio handshake, tool discovery, repeated identity checks, and a bounded

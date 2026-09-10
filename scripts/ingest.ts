@@ -9,6 +9,7 @@ import {
   validateCandidates,
 } from "../lib/ingest";
 import { createConcept, searchConcepts } from "../lib/concepts";
+import { enqueueReview } from "../lib/reviews";
 import { closePool, query } from "../lib/db";
 
 loadEnv();
@@ -22,8 +23,10 @@ loadEnv();
  *            --max 30                        # cap extracted concepts (default 30)
  *
  * Pipeline: split by headings → LLM atomization per chunk → title-based dedup
- * against the existing KB (search score ≥ 60 or exact title → skip) → create
- * with generated_by=llm:ingest:<model>. Requires LLM_BASE_URL/API_KEY/MODEL.
+ * against the existing KB (search score ≥ 25 or exact title → skip and queue
+ * for review) → create with generated_by=llm:ingest:<model>.
+ * Requires LLM_BASE_URL/API_KEY/MODEL. dry-run 只读：查重命中的内容不写队列，
+ * 加 --write 时才落成待裁决记录（见 lib/reviews）。
  */
 function usage(): never {
   console.error("usage: npm run ingest -- <file.md> [--write] [--category <前缀>] [--max <N>]");
@@ -91,7 +94,7 @@ async function main() {
   console.error(`[ingest] 候选 ${candidates.length} 条(丢弃无效 ${dropped} 条)`);
 
   const wouldCreate: string[] = [];
-  const dupes: { title: string; match: string; score: number }[] = [];
+  const dupes: { title: string; match: string; score: number; reviewId: string | null }[] = [];
   const failed: { title: string; reason: string }[] = [];
   for (const c of candidates) {
     let deduped = false;
@@ -99,7 +102,24 @@ async function main() {
       const { results } = await searchConcepts({ id: owner.id, role: owner.role }, c.title, 5, 0, "ingest");
       const best = results[0];
       if (best && (best.score >= 25 || best.title === c.title)) {
-        dupes.push({ title: c.title, match: best.title, score: best.score });
+        // 查重命中不再只是打印一行：内容进审核队列，等人在 /reviews 裁决。
+        // dry-run 不写队列（它的契约是零写入），因此只有 --write 才入队。
+        const reviewId = write
+          ? await enqueueReview(owner, {
+              kind: "near_duplicate",
+              source: "ingest",
+              payload: c,
+              targetConceptId: best.id,
+              targetTitle: best.title,
+              similarity: best.similarity ?? null,
+              score: best.score,
+              reason:
+                best.title === c.title
+                  ? "ingest 查重：标题与已有条目完全相同"
+                  : `ingest 查重：检索分 ${Math.round(best.score)} ≥ 25`,
+            })
+          : null;
+        dupes.push({ title: c.title, match: best.title, score: best.score, reviewId });
         deduped = true;
       }
     } catch (err) {
@@ -122,8 +142,11 @@ async function main() {
   console.log(`\n== ingest 报告(${write ? "已写入" : "dry-run"}) ==`);
   console.log(`${write ? "创建" : "将创建"} ${wouldCreate.length} 条:`);
   for (const t of wouldCreate) console.log("  + " + t);
-  console.log(`跳过相似 ${dupes.length} 条:`);
-  for (const d of dupes) console.log(`  ~ ${d.title} ≈「${d.match}」(score ${d.score})`);
+  console.log(`跳过相似 ${dupes.length} 条${write ? "（已进入审核队列）" : "（dry-run 不入队）"}:`);
+  for (const d of dupes) {
+    const queued = d.reviewId ? ` → 待裁决 ${d.reviewId.slice(0, 8)}` : "";
+    console.log(`  ~ ${d.title} ≈「${d.match}」(score ${d.score})${queued}`);
+  }
   if (failed.length) {
     console.log(`失败 ${failed.length} 条:`);
     for (const f of failed) console.log(`  ✗ ${f.title}: ${f.reason}`);

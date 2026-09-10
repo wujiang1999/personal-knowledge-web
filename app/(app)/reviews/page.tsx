@@ -1,0 +1,100 @@
+import Link from "next/link";
+import { CollapsibleSection } from "@/components/collapsible-section";
+import { ReviewQueue, REVIEW_ACTION_LABEL, REVIEW_SOURCE_LABEL, type ReviewCardItem } from "@/components/review-queue";
+import { requireUser } from "@/lib/requireUser";
+import { countReviewItems, listReviewItems, mergeDraft } from "@/lib/reviews";
+
+/** 审核队列页：写路径拦下的内容在这里等一个人来裁决。
+ *
+ * 页面只读两份列表（待裁决 / 已裁决），合并草稿由服务端算好随卡片下发——
+ * 合并规则只定义在 lib/reviews，客户端不复制一份。 */
+
+const PENDING_LIMIT = 50;
+
+export default async function ReviewsPage() {
+  const user = await requireUser();
+  const [pending, resolved, pendingTotal] = await Promise.all([
+    listReviewItems(user, { status: "pending", limit: PENDING_LIMIT }),
+    listReviewItems(user, { status: "resolved", limit: 20 }),
+    countReviewItems(user, "pending"),
+  ]);
+
+  const cards: ReviewCardItem[] = pending.map((item) => ({
+    id: item.id,
+    kind: item.kind,
+    source: item.source,
+    title: item.title,
+    targetId: item.targetConceptId,
+    targetTitle: item.targetTitle,
+    targetBody: item.targetBody ?? "",
+    newBody: item.payload.body,
+    mergedDraft: mergeDraft(item.targetBody ?? "", item.payload.body),
+    similarity: item.similarity,
+    score: item.score,
+    reason: item.reason,
+    createdAt: item.createdAt,
+  }));
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold">审核队列</h1>
+        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          写路径拦下的内容都在这里等人工裁决：ingest 命中的近似重复、OKF 导入的同名异内容、agent 判出的冲突。
+          四种处理方式全部落在不可变版本上——采用新内容 / 合并生成目标条目的新版本，分别保留新建条目，保留旧内容只结案。
+        </p>
+      </div>
+
+      {cards.length === 0 ? (
+        <p className="rounded-lg border border-zinc-200 bg-white px-4 py-10 text-center text-sm text-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-500">
+          队列是空的——没有等待裁决的内容
+        </p>
+      ) : (
+        <>
+          <ReviewQueue items={cards} />
+          {pendingTotal > cards.length && (
+            <p className="text-xs text-zinc-400 dark:text-zinc-500">
+              还有 {pendingTotal - cards.length} 条待裁决未显示（本页最多 {PENDING_LIMIT} 条）。
+            </p>
+          )}
+        </>
+      )}
+
+      <CollapsibleSection
+        title="已裁决"
+        count={resolved.length}
+        newest={resolved[0]?.resolvedAt ?? null}
+        newestLabel="最近裁决"
+      >
+        {resolved.length === 0 ? (
+          <p className="px-4 py-10 text-center text-sm text-zinc-400 dark:text-zinc-500">还没有裁决记录</p>
+        ) : (
+          <ul className="divide-y border-t border-zinc-100 dark:divide-zinc-800 dark:border-zinc-800">
+            {resolved.map((item) => (
+              <li key={item.id} className="flex flex-wrap items-center gap-3 px-4 py-3 text-sm">
+                <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                  {item.resolvedAction ? REVIEW_ACTION_LABEL[item.resolvedAction] ?? item.resolvedAction : "—"}
+                </span>
+                <span className="font-medium">{item.title}</span>
+                <span className="text-xs text-zinc-400 dark:text-zinc-500">
+                  {REVIEW_SOURCE_LABEL[item.source] ?? item.source}
+                </span>
+                {item.resolvedConceptId && (
+                  <Link
+                    href={`/knowledge/${item.resolvedConceptId}`}
+                    className="text-xs text-blue-600 hover:underline dark:text-blue-400"
+                  >
+                    查看条目
+                  </Link>
+                )}
+                <span className="ml-auto text-xs text-zinc-400 dark:text-zinc-500">
+                  {item.resolvedAt ? new Date(item.resolvedAt).toLocaleString("zh-CN") : "—"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CollapsibleSection>
+    </div>
+  );
+}
