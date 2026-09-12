@@ -38,9 +38,10 @@ async function main() {
   await ensureSemanticSchema();
   await ensureEmbeddingDimension(cfg.dimensions);
 
-  // 批量上限受 EMBED_TIMEOUT_MS(30s) 约束：一次请求最多 ~BATCH×6K 字符，
-  // qwen3.7-text-embedding-flash 实测 16 条会超时，4 条稳定（2026-09-05）。
-  const BATCH = 4;
+  // qwen3.7-text-embedding-flash returned index=0 for every row in a
+  // four-input request (2026-09-13). Use singleton requests for this model
+  // so vector-to-concept mapping never relies on ambiguous response order.
+  const BATCH = cfg.model === "qwen3.7-text-embedding-flash" ? 1 : 4;
   let done = 0;
   for (;;) {
     const { rows } = await query<{

@@ -13,6 +13,7 @@
 | 代码（服务器） | `/opt/personal-knowledge-web`（git 检出，运行账号 `knowledge-web` 属主） |
 | 运行账号 | `knowledge-web`（专用低权限账号，`HOME=/var/lib/knowledge-web`） |
 | 数据库 | 本机 PostgreSQL 16（systemd 依赖 `postgresql.service`） |
+| Embedding | `qwen3.7-text-embedding-flash`，DashScope OpenAI 兼容接口，1024 维（2026-09-13） |
 | 本地源码 | 本目录（git 仓库，origin = github.com/wujiang1999/personal-knowledge-web） |
 
 ## 目录映射
@@ -60,6 +61,18 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 - Caddy 层无静态文件：改 Caddy 配置后 `sudo systemctl reload caddy`，并同步更新本目录快照。
 
 ## 变更历史
+
+- 2026-09-13（Embedding 模型切换）：从 `text-embedding-v4` 切换为
+  `qwen3.7-text-embedding-flash`，保留原百炼端点、密钥及 1024 维。先离线准备
+  48 条新向量（47 条有效知识 + 回收站 1 条），再短暂停服务，在事务内校验源数据
+  未变化并全量替换，修改 `.env` 后启动服务；切换到健康检查成功耗时 1.9 秒。
+  原配置及旧向量保存在服务器私有目录
+  `/var/lib/knowledge-web/embedding-switch-20260913/`，用于回滚，不进入 Git。
+  **接口兼容性**：四输入实测返回四个 `index=0`，因此该模型的回填改为逐条请求，
+  不依赖不明确的批量响应顺序；在线搜索及写入原本就是单输入。
+  **验收**：新向量 48/48、维度一致、正文哈希陈旧数 0；实际 MCP 搜索成功且
+  服务端 `search-embed` 日志确认新模型；`npm run check` 通过（182 测试，
+  0 lint 错误、3 条既有警告）。本批仅修改配置、回填脚本与文档，无应用构建代码变更。
 
 - 2026-09-12（性能与卫生批次：死索引清理 + 向量自愈 + 查询缓存 + 周度节奏，bb05e32）：
   stats 实测驱动的一批。**① 死索引清理（迁移 0020）**——09-04 检索改造后 pgroonga/tsquery

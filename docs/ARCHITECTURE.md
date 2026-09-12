@@ -29,7 +29,7 @@ MCP 客户端（Claude/Codex，personal-wiki）──Bearer pkb_…──► htt
 本机 PostgreSQL 16 @ 127.0.0.1:5432（库 knowledge；扩展 pg_trgm / pgroonga / pgvector）
 附件字节 → 本地磁盘 ATTACHMENT_DIR（默认 ./data/attachments；DB 只存元数据）
 外部 LLM（OpenAI 兼容）：聊天 DeepSeek（摘要/ingest/周报）；embedding DashScope
-                         text-embedding-v4（1024 维，semantic search）
+                         qwen3.7-text-embedding-flash（1024 维，semantic search；2026-09-13 切换）
 ```
 
 要点：
