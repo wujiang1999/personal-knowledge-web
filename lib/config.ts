@@ -37,6 +37,15 @@ export interface LlmConfig {
   model: string;
 }
 
+export function validateModelEndpoint(value: string): string {
+  const url = new URL(value);
+  if (url.username || url.password || url.search || url.hash ||
+      (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))) {
+    throw new Error("Model endpoint must use HTTPS (HTTP allowed only on loopback), without credentials/query/fragment");
+  }
+  return value.replace(/\/+$/, "");
+}
+
 /**
  * Optional OpenAI-compatible chat LLM used by ingest atomization and auto
  * summary. Returns null when any of LLM_BASE_URL / LLM_API_KEY / LLM_MODEL is
@@ -47,7 +56,7 @@ export function getLlmChatConfig(): LlmConfig | null {
   const apiKey = (process.env.LLM_API_KEY ?? "").trim();
   const model = (process.env.LLM_MODEL ?? "").trim();
   if (!baseUrl || !apiKey || !model) return null;
-  return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model };
+  return { baseUrl: validateModelEndpoint(baseUrl), apiKey, model };
 }
 
 /**
@@ -60,9 +69,10 @@ export function getLlmEmbeddingConfig(): (LlmConfig & { dimensions: number }) | 
   const baseUrl = (process.env.LLM_EMBEDDING_BASE_URL ?? process.env.LLM_BASE_URL ?? "").trim();
   const apiKey = (process.env.LLM_EMBEDDING_API_KEY ?? process.env.LLM_API_KEY ?? "").trim();
   const model = (process.env.LLM_EMBEDDING_MODEL ?? "").trim();
-  const dimensions = Math.trunc(Number(process.env.LLM_EMBEDDING_DIMENSIONS ?? 0)) || 0;
-  if (!baseUrl || !apiKey || !model || dimensions <= 0) return null;
-  return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model, dimensions };
+  const dimensions = Number(process.env.LLM_EMBEDDING_DIMENSIONS ?? 0);
+  if (!baseUrl || !apiKey || !model || dimensions === 0) return null;
+  if (!Number.isSafeInteger(dimensions) || dimensions < 1 || dimensions > 16000) throw new Error("Invalid embedding dimensions");
+  return { baseUrl: validateModelEndpoint(baseUrl), apiKey, model, dimensions };
 }
 
 /** Auto summary runs only when explicitly enabled (LLM_AUTO_SUMMARY=1/on/true). */

@@ -1,12 +1,13 @@
 import { getLlmEmbeddingConfig } from "./config";
-import { query } from "./db";
+import { getPool, query } from "./db";
 import { llmEmbed, type LlmCallMeta } from "./llm";
+import { chunkEmbeddingText, embeddingSourceMatches, splitConceptBody } from "./chunks";
 import type { ScopeUser } from "./requireUser";
 import { operatorFilterClauses, type ParsedQuery } from "./search-syntax";
 
 /** Semantic search over pgvector embeddings of concept bodies. Entirely
  * optional: the runtime probe requires (a) the `vector` extension and
- * concept_embeddings table, and (b) an embedding endpoint config. When any
+ * concept_embedding_chunks table, and (b) an embedding endpoint config. When any
  * piece is missing, search stays purely lexical — callers degrade silently. */
 
 /** Runtime probe (cached per process, like the pgroonga one): is semantic
@@ -19,6 +20,7 @@ export async function hasSemanticSearch(): Promise<boolean> {
         `SELECT
            EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')
            AND to_regclass('public.concept_embeddings') IS NOT NULL
+           AND to_regclass('public.concept_embedding_chunks') IS NOT NULL
          AS ok`,
       );
       semanticProbe = rows[0]?.ok === true && getLlmEmbeddingConfig() !== null;
@@ -114,23 +116,91 @@ export async function semanticCandidates(
    * vector recall would leak rows the lexical path just filtered out. */
   filters?: ParsedQuery,
 ): Promise<{ id: string; similarity: number }[]> {
+  const cfg = getLlmEmbeddingConfig();
+  if (!cfg) return [];
   const params: unknown[] = [toVectorLiteral(queryVector)];
   // Alive filter first so trashed concepts never surface from stale embeddings
   // (the backfill only re-syncs on write; a soft delete leaves rows behind).
   const clauses = ["c.deleted_at IS NULL"];
+  params.push(cfg.baseUrl, cfg.model, cfg.dimensions);
+  clauses.push(
+    `cec.embedding_endpoint = $2 AND cec.model = $3 AND cec.dimensions = $4`,
+    "cec.content_hash = v.content_hash",
+    "cec.source_title = c.title",
+    "cec.source_description IS NOT DISTINCT FROM c.description",
+  );
   if (user.role !== "admin") clauses.push(`c.owner_id = $${(params.push(user.id), params.length)}`);
   if (filters) clauses.push(...operatorFilterClauses(filters, params));
   const where = "WHERE " + clauses.join(" AND ");
   const { rows } = await query<{ id: string; similarity: number }>(
-    `SELECT ce.concept_id AS id, 1 - (ce.embedding <=> $1::vector) AS similarity
-     FROM concept_embeddings ce
-     JOIN concepts c ON c.id = ce.concept_id
+    `SELECT DISTINCT ON (cec.concept_id)
+            cec.concept_id AS id, 1 - (cec.embedding <=> $1::vector) AS similarity
+     FROM concept_embedding_chunks cec
+     JOIN concepts c ON c.id = cec.concept_id
+     JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
      ${where}
-     ORDER BY ce.embedding <=> $1::vector
-     LIMIT ${limit}`,
+     ORDER BY cec.concept_id, cec.embedding <=> $1::vector`,
     params,
   );
-  return rows;
+  return rows.sort((a, b) => b.similarity - a.similarity).slice(0, limit);
+}
+
+/** A nearest current chunk for each already-scoped concept.  Ask uses this
+ * instead of blindly sending the beginning of a long note to the chat model.
+ * The joins intentionally repeat the current-source checks from recall: an
+ * async writer or an old model may leave rows behind, but they can never be
+ * used as RAG evidence. */
+export async function relevantChunksForConcepts(
+  user: ScopeUser,
+  queryVector: number[],
+  conceptIds: string[],
+): Promise<
+  {
+    conceptId: string;
+    startOffset: number;
+    endOffset: number;
+    text: string;
+    similarity: number;
+  }[]
+> {
+  if (conceptIds.length === 0) return [];
+  const cfg = getLlmEmbeddingConfig();
+  if (!cfg) return [];
+  const params: unknown[] = [toVectorLiteral(queryVector), conceptIds, cfg.baseUrl, cfg.model, cfg.dimensions];
+  const ownerClause =
+    user.role === "admin" ? "" : `AND c.owner_id = $${(params.push(user.id), params.length)}`;
+  const { rows } = await query<{
+    concept_id: string;
+    start_offset: number;
+    end_offset: number;
+    chunk_text: string;
+    similarity: number;
+  }>(
+    `SELECT DISTINCT ON (cec.concept_id)
+            cec.concept_id, cec.start_offset, cec.end_offset, cec.chunk_text,
+            1 - (cec.embedding <=> $1::vector) AS similarity
+       FROM concept_embedding_chunks cec
+       JOIN concepts c ON c.id = cec.concept_id
+       JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
+      WHERE cec.concept_id = ANY($2::uuid[])
+        AND c.deleted_at IS NULL
+        AND cec.embedding_endpoint = $3
+        AND cec.model = $4
+        AND cec.dimensions = $5
+        AND cec.content_hash = v.content_hash
+        AND cec.source_title = c.title
+        AND cec.source_description IS NOT DISTINCT FROM c.description
+        ${ownerClause}
+      ORDER BY cec.concept_id, cec.embedding <=> $1::vector`,
+    params,
+  );
+  return rows.map((r) => ({
+    conceptId: r.concept_id,
+    startOffset: r.start_offset,
+    endOffset: r.end_offset,
+    text: r.chunk_text,
+    similarity: r.similarity,
+  }));
 }
 
 /** Fetch SearchResult-shaped rows for semantic-only hits (no lexical match
@@ -210,37 +280,64 @@ export async function ensureSemanticSchema(): Promise<void> {
     )
   `);
   await query("CREATE INDEX IF NOT EXISTS idx_embeddings_owner ON concept_embeddings (owner_id)");
+  await query(`
+    CREATE TABLE IF NOT EXISTS concept_embedding_chunks (
+      concept_id           uuid NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+      chunk_ordinal        integer NOT NULL,
+      owner_id             uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      content_hash         text NOT NULL,
+      source_title         text NOT NULL,
+      source_description   text,
+      embedding_endpoint   text NOT NULL,
+      model                text NOT NULL,
+      dimensions           integer NOT NULL CHECK (dimensions > 0),
+      start_offset         integer NOT NULL CHECK (start_offset >= 0),
+      end_offset           integer NOT NULL CHECK (end_offset >= start_offset),
+      chunk_text           text NOT NULL,
+      embedding            vector NOT NULL,
+      created_at           timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (concept_id, chunk_ordinal)
+    )
+  `);
+  await query(
+    "CREATE INDEX IF NOT EXISTS idx_embedding_chunks_owner_model ON concept_embedding_chunks (owner_id, embedding_endpoint, model, dimensions)",
+  );
 }
 
-/**
- * Pin the embedding column's dimension and add the ANN index once the real
- * embedding size is known (pgvector needs a fixed typmod for hnsw). Idempotent
- * per process; failures are swallowed into a warning — an unindexed table is
- * merely slower, and this scale tolerates it.
+/** Pin the embedding columns before any remote embedding work begins. A
+ * populated vector column is never altered in place: silently converting a
+ * differently dimensioned historical index would hide an incomplete rebuild.
  */
 export async function ensureEmbeddingDimension(dimensions: number): Promise<void> {
-  try {
-    await query(
-      `DO $$
-       BEGIN
-         IF EXISTS (
-           SELECT 1 FROM pg_attribute
-           WHERE attrelid = 'public.concept_embeddings'::regclass
-             AND attname = 'embedding' AND atttypmod = -1
-         ) THEN
-           ALTER TABLE concept_embeddings ALTER COLUMN embedding TYPE vector(${dimensions});
-         END IF;
-       END $$;`,
+  const tables = ["concept_embeddings", "concept_embedding_chunks"] as const;
+  for (const table of tables) {
+    const { rows } = await query<{ dimension: number; has_rows: boolean }>(
+      `SELECT a.atttypmod AS dimension, EXISTS (SELECT 1 FROM ${table} LIMIT 1) AS has_rows
+         FROM pg_attribute a
+        WHERE a.attrelid = 'public.${table}'::regclass
+          AND a.attname = 'embedding' AND NOT a.attisdropped`,
     );
-    await query(
-      "CREATE INDEX IF NOT EXISTS idx_embeddings_hnsw ON concept_embeddings USING hnsw (embedding vector_cosine_ops)",
-    );
-  } catch (err) {
-    console.error(
-      "[semantic] dimension/index ensure failed (continuing unindexed):",
-      err instanceof Error ? err.message : err,
-    );
+    const state = rows[0];
+    if (!state) throw new Error(`Embedding table ${table} is missing its embedding column`);
+    if (state.dimension === -1) {
+      if (state.has_rows) {
+        throw new Error(
+          `Embedding dimension for ${table} is unpinned with existing rows; run a planned reindex migration before backfill`,
+        );
+      }
+      await query(`ALTER TABLE ${table} ALTER COLUMN embedding TYPE vector(${dimensions})`);
+    } else if (state.dimension !== dimensions) {
+      throw new Error(
+        `Embedding dimension mismatch for ${table}: database vector(${state.dimension}), configured vector(${dimensions}); run a planned rebuild before backfill`,
+      );
+    }
   }
+  await query(
+    "CREATE INDEX IF NOT EXISTS idx_embeddings_hnsw ON concept_embeddings USING hnsw (embedding vector_cosine_ops)",
+  );
+  await query(
+    "CREATE INDEX IF NOT EXISTS idx_embedding_chunks_hnsw ON concept_embedding_chunks USING hnsw (embedding vector_cosine_ops)",
+  );
 }
 
 // -------------------------------
@@ -258,10 +355,16 @@ const QUERY_EMBED_MAX = Number(process.env.QUERY_EMBED_CACHE_MAX ?? 200);
  * caller). Resolves from the LRU when fresh; otherwise one embedding call,
  * attributed via `meta`. Throws on failure — callers degrade to lexical-only. */
 export async function cachedQueryVector(needle: string, meta?: LlmCallMeta): Promise<number[]> {
-  const hit = queryEmbedCache.get(needle);
+  const cfg = getLlmEmbeddingConfig();
+  if (!cfg) throw new Error("Embedding 未配置");
+  // Cache entries are only interchangeable inside the exact vector space and
+  // user scope. A same-named model behind another endpoint is not assumed to
+  // produce compatible vectors.
+  const cacheKey = `${meta?.userId ?? "system"}\u0000${cfg.baseUrl}\u0000${cfg.model}\u0000${cfg.dimensions}\u0000${needle}`;
+  const hit = queryEmbedCache.get(cacheKey);
   if (hit && Date.now() - hit.at < QUERY_EMBED_TTL_MS) {
-    queryEmbedCache.delete(needle);
-    queryEmbedCache.set(needle, hit); // refresh LRU position
+    queryEmbedCache.delete(cacheKey);
+    queryEmbedCache.set(cacheKey, hit); // refresh LRU position
     return hit.vector;
   }
   const vector = (await llmEmbed([needle], meta))[0];
@@ -269,16 +372,11 @@ export async function cachedQueryVector(needle: string, meta?: LlmCallMeta): Pro
     const oldest = queryEmbedCache.keys().next().value;
     if (oldest !== undefined) queryEmbedCache.delete(oldest);
   }
-  queryEmbedCache.set(needle, { at: Date.now(), vector });
+  queryEmbedCache.set(cacheKey, { at: Date.now(), vector });
   return vector;
 }
 
-/** Fire-and-forget embedding sync for version writes: keeps
- * concept_embeddings at full coverage without manual backfill runs. Same text
- * construction and upsert as scripts/embed-backfill.ts. Never blocks the
- * write; failures are logged and swallowed — search degrades to lexical-only,
- * and the next write (or `npm run db:embed-backfill`) repairs the row. */
-export function queueConceptEmbedding(input: {
+export interface ConceptEmbeddingInput {
   conceptId: string;
   ownerId: string;
   contentHash: string;
@@ -287,23 +385,109 @@ export function queueConceptEmbedding(input: {
   body: string;
   userId?: string | null;
   apiKeyId?: string | null;
-}): void {
+}
+
+/** Publish all chunks as one replacement. The caller computes every vector
+ * before this transaction starts; a concurrent save can therefore only cause
+ * a harmless skipped publish, never a partially indexed old version. */
+export async function publishConceptEmbedding(
+  input: ConceptEmbeddingInput,
+  vectors: number[][],
+): Promise<boolean> {
   const cfg = getLlmEmbeddingConfig();
-  if (!cfg) return;
-  void (async () => {
-    const text = `${input.title}\n${input.description ?? ""}\n${input.body.slice(0, 6000)}`;
-    const vectors = await llmEmbed([text], {
-      purpose: "backfill",
-      userId: input.userId ?? null,
-      apiKeyId: input.apiKeyId ?? null,
-    });
-    await query(
+  if (!cfg) return false;
+  const chunks = splitConceptBody(input.body);
+  if (vectors.length !== chunks.length || vectors.some((vector) => vector.length !== cfg.dimensions)) {
+    throw new Error("Embedding chunk/vector count or dimension mismatch");
+  }
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const current = await client.query<{
+      owner_id: string;
+      title: string;
+      description: string | null;
+      content_hash: string;
+    }>(
+      `SELECT c.owner_id, c.title, c.description, v.content_hash
+         FROM concepts c
+         JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
+        WHERE c.id = $1
+        FOR UPDATE`,
+      [input.conceptId],
+    );
+    const source = current.rows[0];
+    if (
+      !source ||
+      !embeddingSourceMatches(
+        { contentHash: source.content_hash, title: source.title, description: source.description },
+        { contentHash: input.contentHash, title: input.title, description: input.description },
+      )
+    ) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+
+    await client.query("DELETE FROM concept_embedding_chunks WHERE concept_id = $1", [input.conceptId]);
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      await client.query(
+        `INSERT INTO concept_embedding_chunks
+           (concept_id, chunk_ordinal, owner_id, content_hash, source_title, source_description,
+            embedding_endpoint, model, dimensions, start_offset, end_offset, chunk_text, embedding)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::vector)`,
+        [
+          input.conceptId,
+          chunk.ordinal,
+          source.owner_id,
+          input.contentHash,
+          input.title,
+          input.description,
+          cfg.baseUrl,
+          cfg.model,
+          cfg.dimensions,
+          chunk.startOffset,
+          chunk.endOffset,
+          chunk.text,
+          toVectorLiteral(vectors[i]),
+        ],
+      );
+    }
+    // Keep one first-chunk vector for existing health/statistics consumers.
+    await client.query(
       `INSERT INTO concept_embeddings (concept_id, owner_id, content_hash, model, embedding)
        VALUES ($1, $2, $3, $4, $5::vector)
        ON CONFLICT (concept_id) DO UPDATE
          SET owner_id = $2, content_hash = $3, model = $4, embedding = $5::vector, created_at = now()`,
-      [input.conceptId, input.ownerId, input.contentHash, cfg.model, toVectorLiteral(vectors[0])],
+      [input.conceptId, source.owner_id, input.contentHash, cfg.model, toVectorLiteral(vectors[0])],
     );
+    await client.query("COMMIT");
+    return true;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Fire-and-forget indexing after version writes. It builds every current
+ * document chunk before atomically publishing; failures leave the prior index
+ * intact and the backfill can repair it later. */
+export function queueConceptEmbedding(input: ConceptEmbeddingInput): void {
+  const cfg = getLlmEmbeddingConfig();
+  if (!cfg) return;
+  void (async () => {
+    const chunks = splitConceptBody(input.body);
+    const vectors = await llmEmbed(
+      chunks.map((chunk) => chunkEmbeddingText(input.title, input.description, chunk)),
+      {
+        purpose: "backfill",
+        userId: input.userId ?? null,
+        apiKeyId: input.apiKeyId ?? null,
+      },
+    );
+    await publishConceptEmbedding(input, vectors);
   })().catch((err: unknown) => {
     console.error(
       "[semantic] write-path embed sync failed:",

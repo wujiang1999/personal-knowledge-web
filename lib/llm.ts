@@ -1,5 +1,6 @@
 import { getLlmChatConfig, getLlmEmbeddingConfig, type LlmConfig } from "./config";
 import { logLlmCall, usageInt, type LlmCallLogInput } from "./logs";
+import { positiveLimit, reserveModelCall } from "./usage-guard";
 
 /** Chat + embedding clients for any OpenAI-compatible endpoint. No SDK —
  * the surface used is two POSTs. Secrets are read from lib/config only and
@@ -24,10 +25,10 @@ async function postJson(
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
+      redirect: "error",
     });
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new Error(`LLM 请求失败(${url.replace(/\?.*$/, "")}):${detail}`);
+    throw new Error(`LLM 请求失败:${err instanceof Error && err.name === "TimeoutError" ? "timeout" : "network error"}`);
   }
   const text = await res.text().catch(() => "");
   let data: unknown = null;
@@ -104,6 +105,29 @@ function readErrorDetail(data: unknown): string {
   return typeof err.message === "string" ? err.message : "";
 }
 
+export function isUnsupportedThinking(status: number, data: unknown): boolean {
+  const detail = readErrorDetail(data);
+  return [400, 422].includes(status) && /thinking/i.test(detail) && /unsupported|unknown|not supported|unrecognized|unexpected|不支持/i.test(detail);
+}
+
+function providerModel(data: unknown): string | null {
+  if (typeof data !== "object" || !data || !("model" in data)) return null;
+  return typeof data.model === "string" ? data.model.slice(0,100) : null;
+}
+
+export function validateEmbeddingRows(data: unknown, count: number, dimensions: number): number[][] {
+  const rows = readEmbeddingRows(data);
+  if (!rows || rows.length !== count) throw new Error("LLM embeddings 返回结构与输入不一致");
+  const sorted = rows.slice().sort((a,b)=>a.index-b.index);
+  return sorted.map((row,i)=> {
+    const v = row.embedding;
+    if (row.index !== i || !Array.isArray(v) || v.length !== dimensions || !v.every(x=>typeof x === "number" && Number.isFinite(x)) || !v.some(x=>x!==0)) {
+      throw new Error("LLM embeddings 返回索引、维度或数值不合法");
+    }
+    return v as number[];
+  });
+}
+
 /** Embedding rows as { index, embedding } pairs, narrowed from parsed JSON;
  * null when the response shape is not an array. */
 function readEmbeddingRows(data: unknown): { index: number; embedding: unknown }[] | null {
@@ -111,8 +135,8 @@ function readEmbeddingRows(data: unknown): { index: number; embedding: unknown }
   const rows = data.data;
   if (!Array.isArray(rows)) return null;
   return rows.map((r) => {
-    if (typeof r !== "object" || r === null) return { index: 0, embedding: null };
-    const index = typeof r.index === "number" ? r.index : 0;
+    if (typeof r !== "object" || r === null) return { index: -1, embedding: null };
+    const index = typeof r.index === "number" ? r.index : -1;
     return { index, embedding: "embedding" in r ? r.embedding : null };
   });
 }
@@ -167,12 +191,15 @@ export async function llmChatJsonWith<T>(
   const startedAt = Date.now();
   const inputChars = messages.reduce((s, m) => s + m.content.length, 0);
   const usage = { promptTokens: null as number | null, completionTokens: null as number | null };
+  let actualModel: string | null = null;
+  let release: ((actual: number | null) => Promise<void>) | undefined;
   const log = (ok: boolean, error: string | null): LlmCallLogInput => ({
     kind: "llm",
     purpose: meta.purpose,
     userId: meta.userId ?? null,
     apiKeyId: meta.apiKeyId ?? null,
     model: cfg.model,
+    providerModel: actualModel,
     inputChars,
     promptTokens: usage.promptTokens,
     completionTokens: usage.completionTokens,
@@ -187,23 +214,27 @@ export async function llmChatJsonWith<T>(
     // Not all providers support response_format; a JSON-parsing prompt plus
     // tolerant extraction is more portable than a hard JSON mode.
   };
-  if (opts?.maxTokens) body.max_tokens = opts.maxTokens;
+  const maxTokens = opts?.maxTokens ?? 1200;
+  if (!Number.isSafeInteger(maxTokens) || maxTokens < 1 || maxTokens > 8192) throw new Error("Invalid output token limit");
+  if (inputChars > positiveLimit("MODEL_MAX_INPUT_CHARS", 100_000)) throw new Error("模型输入超过长度限制，请拆分后重试");
+  body.max_tokens = maxTokens;
   const thinkDisabled = opts?.thinking !== true;
   if (thinkDisabled) body.thinking = { type: "disabled" };
   try {
+    release = await reserveModelCall(meta.userId, "llm", Buffer.byteLength(JSON.stringify(body), "utf8") + maxTokens + 512);
     let res = await postJson(`${cfg.baseUrl}/chat/completions`, cfg.apiKey, body, CHAT_TIMEOUT_MS);
-    if (!res.ok && res.status >= 400 && res.status < 500 && thinkDisabled) {
+    if (!res.ok && thinkDisabled && isUnsupportedThinking(res.status, res.data)) {
       const plain = { ...body };
       delete plain.thinking;
       res = await postJson(`${cfg.baseUrl}/chat/completions`, cfg.apiKey, plain, CHAT_TIMEOUT_MS);
     }
     const { ok, status, data } = res;
+    actualModel = providerModel(data);
     const u = readUsage(data);
     usage.promptTokens = u.promptTokens;
     usage.completionTokens = u.completionTokens;
     if (!ok) {
-      const detail = readErrorDetail(data);
-      throw new Error(`LLM chat 返回 HTTP ${status}${detail ? `:${detail.slice(0, 200)}` : ""}`);
+      throw new Error(`LLM chat 返回 HTTP ${status}`);
     }
     const content = readChatContent(data);
     if (typeof content !== "string" || !content.trim()) {
@@ -216,6 +247,8 @@ export async function llmChatJsonWith<T>(
     // Logged exactly once here — success paths return above.
     logLlmCall(log(false, err instanceof Error ? err.message : String(err)));
     throw err;
+  } finally {
+    await release?.(usage.promptTokens !== null && usage.completionTokens !== null ? usage.promptTokens + usage.completionTokens : null).catch(() => {});
   }
 }
 
@@ -225,20 +258,32 @@ export async function llmEmbed(
   texts: string[],
   meta?: LlmCallMeta
 ): Promise<number[][]> {
+  // Some compatible endpoints return index=0 for every batch row. Singleton
+  // calls make correspondence explicit; never trust response array order.
+  if (texts.length === 0) return [];
+  if (texts.length > 1) {
+    const all: number[][] = [];
+    for (const text of texts) all.push((await llmEmbed([text], meta))[0]);
+    return all;
+  }
   const purpose = meta?.purpose ?? "embed";
   const userId = meta?.userId ?? null;
   const apiKeyId = meta?.apiKeyId ?? null;
   const startedAt = Date.now();
   const inputChars = texts.reduce((s, t) => s + t.length, 0);
   let model = "unknown";
+  let actualModel: string | null = null;
+  let promptTokens: number | null = null;
+  let release: ((actual: number | null) => Promise<void>) | undefined;
   const log = (ok: boolean, error: string | null): LlmCallLogInput => ({
     kind: "embedding",
     purpose,
     userId,
     apiKeyId,
     model,
+    providerModel: actualModel,
     inputChars,
-    promptTokens: null,
+    promptTokens,
     completionTokens: null,
     tookMs: Date.now() - startedAt,
     ok,
@@ -248,30 +293,27 @@ export async function llmEmbed(
     const cfg = getLlmEmbeddingConfig();
     if (!cfg) throw new Error("Embedding 未配置(LLM_EMBEDDING_*)");
     model = cfg.model;
+    if (inputChars > positiveLimit("MODEL_MAX_INPUT_CHARS", 100_000)) throw new Error("Embedding 输入超过长度限制");
+    release = await reserveModelCall(userId, "embedding", Buffer.byteLength(texts[0], "utf8") + 512);
     const { ok, status, data } = await postJson(
       `${cfg.baseUrl}/embeddings`,
       cfg.apiKey,
-      { model: cfg.model, input: texts },
+      { model: cfg.model, input: texts, dimensions: cfg.dimensions },
       EMBED_TIMEOUT_MS
     );
+    actualModel = providerModel(data);
+    promptTokens = readUsage(data).promptTokens;
     if (!ok) {
       throw new Error(`LLM embeddings 返回 HTTP ${status}`);
     }
-    const rows = readEmbeddingRows(data);
-    if (!rows || rows.length !== texts.length) {
-      throw new Error("LLM embeddings 返回结构与输入不一致");
-    }
-    const vectors = rows
-      .slice()
-      .sort((a, b) => a.index - b.index)
-      .map((r) => (Array.isArray(r.embedding) ? r.embedding.map(Number) : null));
-    if (vectors.some((v) => v === null || v.length === 0)) {
-      throw new Error("LLM embeddings 返回缺少向量");
-    }
+    if (actualModel !== null && actualModel !== cfg.model) throw new Error("LLM embeddings 返回了不同模型，拒绝混用向量");
+    const vectors = validateEmbeddingRows(data, texts.length, cfg.dimensions);
     logLlmCall(log(true, null));
     return vectors.filter((v): v is number[] => v !== null);
   } catch (err) {
     logLlmCall(log(false, err instanceof Error ? err.message : String(err)));
     throw err;
+  } finally {
+    await release?.(promptTokens).catch(() => {});
   }
 }

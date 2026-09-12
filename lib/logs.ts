@@ -143,6 +143,7 @@ export interface LlmCallLogInput {
   kind: "llm" | "embedding";
   purpose: string;
   model: string;
+  providerModel?: string | null;
   inputChars: number;
   promptTokens: number | null;
   completionTokens: number | null;
@@ -165,6 +166,7 @@ export const llmCallLogSchema = z.object({
     .string()
     .transform((s) => s.slice(0, 100))
     .pipe(z.string().min(1)),
+  provider_model: z.string().max(100).nullish().transform(v => v ?? null),
   input_chars: z.number().int().min(0).max(100_000_000).nullish().transform((v) => v ?? null),
   prompt_tokens: z.number().int().min(0).max(100_000_000).nullish().transform((v) => v ?? null),
   completion_tokens: z.number().int().min(0).max(100_000_000).nullish().transform((v) => v ?? null),
@@ -187,9 +189,9 @@ export async function insertLlmCall(
 ): Promise<void> {
   await query(
     `INSERT INTO llm_calls
-       (user_id, api_key_id, kind, purpose, model, input_chars, prompt_tokens, completion_tokens, took_ms, ok, error)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-    [userId, apiKeyId ?? null, p.kind, p.purpose, p.model, p.input_chars, p.prompt_tokens, p.completion_tokens, p.took_ms, p.ok, p.error]
+       (user_id, api_key_id, kind, purpose, model, input_chars, prompt_tokens, completion_tokens, took_ms, ok, error, provider_model)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    [userId, apiKeyId ?? null, p.kind, p.purpose, p.model, p.input_chars, p.prompt_tokens, p.completion_tokens, p.took_ms, p.ok, p.error, p.provider_model]
   );
 }
 
@@ -198,6 +200,7 @@ export function logLlmCall(input: LlmCallLogInput): void {
     kind: input.kind,
     purpose: input.purpose.slice(0, 50),
     model: input.model.slice(0, 100) || "unknown",
+    provider_model: input.providerModel?.slice(0,100) ?? null,
     input_chars: Math.max(0, Math.trunc(input.inputChars)),
     prompt_tokens: input.promptTokens === null ? null : Math.max(0, Math.trunc(input.promptTokens)),
     completion_tokens: input.completionTokens === null ? null : Math.max(0, Math.trunc(input.completionTokens)),
@@ -211,6 +214,7 @@ export function logLlmCall(input: LlmCallLogInput): void {
 
 /** Coerce a provider usage field (unknown JSON) into a non-negative int. */
 export function usageInt(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : null;
 }

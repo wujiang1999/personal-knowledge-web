@@ -1,89 +1,146 @@
 import { loadEnv } from "./load-env";
+import { chunkEmbeddingText, chunkProfileMatches, splitConceptBody } from "../lib/chunks";
 import { getLlmEmbeddingConfig } from "../lib/config";
-import { llmEmbed } from "../lib/llm";
-import { ensureEmbeddingDimension, ensureSemanticSchema, toVectorLiteral } from "../lib/semantic";
 import { closePool, query } from "../lib/db";
+import { llmEmbed } from "../lib/llm";
+import {
+  ensureEmbeddingDimension,
+  ensureSemanticSchema,
+  publishConceptEmbedding,
+  type ConceptEmbeddingInput,
+} from "../lib/semantic";
 
 loadEnv();
 
+type BackfillConcept = ConceptEmbeddingInput;
+
+interface StoredChunkProfile {
+  chunk_ordinal: number;
+  content_hash: string;
+  source_title: string;
+  source_description: string | null;
+  embedding_endpoint: string;
+  model: string;
+  dimensions: number;
+  start_offset: number;
+  end_offset: number;
+  chunk_text: string;
+}
+
+/** The exact comparison makes repeated backfills no-ops only when every
+ * chunk belongs to the current body and current configured vector space. */
+export function isChunkProfileComplete(
+  stored: StoredChunkProfile[],
+  input: Pick<ConceptEmbeddingInput, "contentHash" | "title" | "description" | "body">,
+  cfg: { baseUrl: string; model: string; dimensions: number },
+): boolean {
+  const expected = splitConceptBody(input.body);
+  if (stored.length !== expected.length) return false;
+  return expected.every((chunk) => {
+    const row = stored.find((candidate) => candidate.chunk_ordinal === chunk.ordinal);
+    return !!row && chunkProfileMatches(
+      {
+        contentHash: row.content_hash,
+        title: row.source_title,
+        description: row.source_description,
+        endpoint: row.embedding_endpoint,
+        model: row.model,
+        dimensions: row.dimensions,
+        startOffset: row.start_offset,
+        endOffset: row.end_offset,
+        text: row.chunk_text,
+      },
+      { contentHash: input.contentHash, title: input.title, description: input.description },
+      { endpoint: cfg.baseUrl, model: cfg.model, dimensions: cfg.dimensions },
+      chunk,
+    );
+  });
+}
+
+async function needsBackfill(input: BackfillConcept, cfg: { baseUrl: string; model: string; dimensions: number }): Promise<boolean> {
+  const [chunks, legacy] = await Promise.all([
+    query<StoredChunkProfile>(
+      `SELECT chunk_ordinal, content_hash, source_title, source_description, embedding_endpoint,
+              model, dimensions, start_offset, end_offset, chunk_text
+         FROM concept_embedding_chunks WHERE concept_id = $1`,
+      [input.conceptId],
+    ),
+    query<{ ok: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1 FROM concept_embeddings
+          WHERE concept_id = $1 AND owner_id = $2 AND content_hash = $3 AND model = $4
+       ) AS ok`,
+      [input.conceptId, input.ownerId, input.contentHash, cfg.model],
+    ),
+  ]);
+  return !legacy.rows[0]?.ok || !isChunkProfileComplete(chunks.rows, input, cfg);
+}
+
 /**
- * Embed every concept's current version into concept_embeddings for semantic
- * search. Idempotent: only rows whose content_hash (or model) differs from
- * the stored embedding are recomputed.
- *
- *   npm run db:embed-backfill
- *
- * Requires the pgvector extension (superuser: CREATE EXTENSION vector) and
- * LLM_EMBEDDING_* config; see .env.example.
+ * Rebuild chunk embeddings for every current concept, including soft-deleted
+ * records. Keeping trash indexed preserves the legacy coverage/stats
+ * invariant while every recall query still filters deleted_at IS NULL.
  */
 async function main() {
   const cfg = getLlmEmbeddingConfig();
   if (!cfg) {
-    console.error(
-      "Embedding 未配置:需要 LLM_EMBEDDING_MODEL 与 LLM_EMBEDDING_DIMENSIONS,\n" +
-        "以及 LLM_EMBEDDING_BASE_URL / LLM_EMBEDDING_API_KEY(缺省回退 LLM_BASE_URL / LLM_API_KEY)。"
-    );
-    process.exit(1);
+    throw new Error("Embedding 未配置:需要 LLM_EMBEDDING_MODEL、LLM_EMBEDDING_DIMENSIONS 和 endpoint/key。");
   }
   const ext = await query<{ ok: boolean }>(
-    "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS ok"
+    "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS ok",
   );
-  if (!ext.rows[0].ok) {
-    console.error(
-      "pgvector 扩展未安装:先安装扩展包(如 apt install postgresql-16-pgvector),\n" +
-        "再以 superuser 执行 CREATE EXTENSION vector;,然后重跑本脚本。"
-    );
-    process.exit(1);
+  if (!ext.rows[0]?.ok) {
+    throw new Error("pgvector 扩展未安装:先安装并执行 CREATE EXTENSION vector;，然后重跑本脚本。");
   }
   await ensureSemanticSchema();
   await ensureEmbeddingDimension(cfg.dimensions);
 
-  // qwen3.7-text-embedding-flash returned index=0 for every row in a
-  // four-input request (2026-09-13). Use singleton requests for this model
-  // so vector-to-concept mapping never relies on ambiguous response order.
-  const BATCH = cfg.model === "qwen3.7-text-embedding-flash" ? 1 : 4;
-  let done = 0;
-  for (;;) {
-    const { rows } = await query<{
-      id: string;
-      owner_id: string;
-      content_hash: string;
-      title: string;
-      description: string | null;
-      body_markdown: string;
-    }>(
-      `SELECT c.id, c.owner_id, v.content_hash, c.title, c.description, v.body_markdown
+  const { rows } = await query<{
+    id: string;
+    owner_id: string;
+    content_hash: string;
+    title: string;
+    description: string | null;
+    body_markdown: string;
+  }>(
+    `SELECT c.id, c.owner_id, v.content_hash, c.title, c.description, v.body_markdown
        FROM concepts c
        JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
-       LEFT JOIN concept_embeddings e ON e.concept_id = c.id AND e.model = $1
-       WHERE c.deleted_at IS NULL AND (e.concept_id IS NULL OR e.content_hash IS DISTINCT FROM v.content_hash)
-       LIMIT ${BATCH}`,
-      [cfg.model]
-    );
-    if (rows.length === 0) break;
+      ORDER BY c.id`,
+  );
 
-    const texts = rows.map(
-      (r) => `${r.title}\n${r.description ?? ""}\n${r.body_markdown.slice(0, 6000)}`
+  let done = 0;
+  let skipped = 0;
+  for (const row of rows) {
+    const input: BackfillConcept = {
+      conceptId: row.id,
+      ownerId: row.owner_id,
+      contentHash: row.content_hash,
+      title: row.title,
+      description: row.description,
+      body: row.body_markdown,
+    };
+    if (!(await needsBackfill(input, cfg))) {
+      skipped++;
+      continue;
+    }
+    const chunks = splitConceptBody(input.body);
+    const vectors = await llmEmbed(
+      chunks.map((chunk) => chunkEmbeddingText(input.title, input.description, chunk)),
+      { purpose: "backfill" },
     );
-    const vectors = await llmEmbed(texts, { purpose: "backfill" });
-    if (vectors[0].length !== cfg.dimensions) {
-      throw new Error(
-        `embedding 实际维度 ${vectors[0].length} 与 LLM_EMBEDDING_DIMENSIONS=${cfg.dimensions} 不符,请修正配置后重跑`
-      );
+    if (!(await publishConceptEmbedding(input, vectors))) {
+      // A concurrent save won the race. Its queue will index the replacement;
+      // leave this row for the next idempotent run rather than writing stale chunks.
+      process.stderr.write(`[embed] 跳过已变更条目 ${input.conceptId}\n`);
+      continue;
     }
-    for (let i = 0; i < rows.length; i++) {
-      await query(
-        `INSERT INTO concept_embeddings (concept_id, owner_id, content_hash, model, embedding)
-         VALUES ($1, $2, $3, $4, $5::vector)
-         ON CONFLICT (concept_id) DO UPDATE
-           SET owner_id = $2, content_hash = $3, model = $4, embedding = $5::vector, created_at = now()`,
-        [rows[i].id, rows[i].owner_id, rows[i].content_hash, cfg.model, toVectorLiteral(vectors[i])]
-      );
-    }
-    done += rows.length;
+    done++;
     process.stderr.write(`[embed] ${done} 条已向量化\n`);
   }
-  console.log(`backfill 完成:${done} 条新向量化(模型 ${cfg.model},维度 ${cfg.dimensions})`);
+  console.log(
+    `backfill 完成:${done} 条重建，${skipped} 条已是完整当前分块（模型 ${cfg.model},维度 ${cfg.dimensions}）`,
+  );
 }
 
 main()

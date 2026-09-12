@@ -4,6 +4,8 @@ import { DuplicateBodyError, NotFoundError } from "./concepts";
 import { UserExistsError } from "./users";
 import { logRequest } from "./logs";
 import { resolveKeyContext } from "./apiKey";
+import { ApiKeyAccessError, ApiKeyAuthenticationError, enforceApiKeyAccess } from "./key-policy";
+import { ModelLimitError } from "./usage-guard";
 
 type Handler<A extends unknown[]> = (...args: A) => Promise<Response>;
 
@@ -23,6 +25,8 @@ export function withRoute<A extends unknown[]>(name: string, handler: Handler<A>
     const startedAt = Date.now();
     let res: Response;
     try {
+      const {method,path} = parseRouteName(name);
+      await enforceApiKeyAccess(method,path,args[0] as Request | undefined);
       res = await handler(...args);
     } catch (err) {
       res = mapRouteError(name, err);
@@ -33,6 +37,9 @@ export function withRoute<A extends unknown[]>(name: string, handler: Handler<A>
 }
 
 function mapRouteError(name: string, err: unknown): Response {
+  if (err instanceof ApiKeyAuthenticationError) return NextResponse.json({error: "Unauthorized"},{status:401});
+  if (err instanceof ApiKeyAccessError) return NextResponse.json({error: "API key permission denied"},{status:403});
+  if (err instanceof ModelLimitError) return NextResponse.json({error:err.message},{status:429,headers:{"Retry-After":"60"}});
   if (err instanceof NotFoundError) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }

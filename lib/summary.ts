@@ -4,6 +4,7 @@ import { claimTask, failTask, finishTask, progressTask } from "./tasks";
 import { query } from "./db";
 import { llmChatJson } from "./llm";
 import { invalidateSearchCache } from "./concepts";
+import { queueConceptEmbedding } from "./semantic";
 
 /** Auto summary: when a concept is saved without a description, fill it from
  * the LLM in the background. Never blocks or fails the write path — the hook
@@ -30,8 +31,8 @@ export async function generateSummaryForConcept(conceptId: string): Promise<Summ
   const cfg = getLlmChatConfig();
   if (!cfg) return { status: "skipped", reason: "LLM 未配置" };
 
-  const cur = await query<{ owner_id: string; title: string; description: string | null; body_markdown: string }>(
-    `SELECT c.owner_id, c.title, c.description, v.body_markdown
+  const cur = await query<{ owner_id: string; title: string; description: string | null; body_markdown: string; current_version: number; content_hash: string }>(
+    `SELECT c.owner_id, c.title, c.description, v.body_markdown, c.current_version, v.content_hash
      FROM concepts c
      JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
      WHERE c.id = $1 AND c.deleted_at IS NULL`,
@@ -40,7 +41,7 @@ export async function generateSummaryForConcept(conceptId: string): Promise<Summ
   if (cur.rows.length === 0) return { status: "skipped", reason: "concept not found" };
   if (cur.rows[0].description) return { status: "skipped", reason: "description 已存在" };
 
-  const { owner_id, title, body_markdown } = cur.rows[0];
+  const { owner_id, title, body_markdown, current_version, content_hash } = cur.rows[0];
   const data = await llmChatJson<{ description?: unknown }>([
     {
       role: "system",
@@ -58,14 +59,16 @@ export async function generateSummaryForConcept(conceptId: string): Promise<Summ
   // Metadata-only update: mirrors addConceptVersion's same-hash branch so the
   // "latest version row = latest metadata" invariant holds. No new version,
   // no source row, no generated_by change (that column marks body origin).
-  await query("UPDATE concepts SET description = $2, updated_at = now() WHERE id = $1", [
-    conceptId,
-    description,
-  ]);
-  await query(
-    "UPDATE concept_versions SET description = $2 WHERE concept_id = $1 AND version_number = (SELECT current_version FROM concepts WHERE id = $1)",
-    [conceptId, description]
-  );
+  const updated = await query(`WITH changed AS (
+    UPDATE concepts SET description=$2,updated_at=now()
+     WHERE id=$1 AND current_version=$3 AND deleted_at IS NULL
+       AND title=$4 AND description IS NOT DISTINCT FROM $5
+    RETURNING id,current_version
+  ) UPDATE concept_versions v SET description=$2 FROM changed c
+     WHERE v.concept_id=c.id AND v.version_number=c.current_version`,
+    [conceptId,description,current_version,title,cur.rows[0].description]);
+  if (!updated.rowCount) return {status:"skipped",reason:"条目已变更，未覆盖新内容"};
+  queueConceptEmbedding({conceptId,ownerId:owner_id,contentHash:content_hash,title,description,body:body_markdown,userId:owner_id});
   invalidateSearchCache();
   return { status: "done", description };
 }

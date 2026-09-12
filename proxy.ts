@@ -31,7 +31,7 @@ export default async function proxy(req: NextRequest) {
   // let the request reach the route handler, where requireApiUser resolves
   // the key against the database and answers 401 itself. Every protected /api
   // route performs that check.
-  const hasBearer = (req.headers.get("authorization") ?? "").startsWith("Bearer ");
+  const hasBearer = /^Bearer(?:\s|$)/i.test(req.headers.get("authorization") ?? "");
 
   const valid = hasBearer || (await isValidSession(req));
 

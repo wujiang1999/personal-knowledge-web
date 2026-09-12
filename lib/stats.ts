@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { query } from "./db";
+import { getLlmEmbeddingConfig } from "./config";
 import type { ScopeUser } from "./requireUser";
 
 /** Aggregations behind the /stats page and GET /api/stats — pure reads over
@@ -238,6 +239,7 @@ export interface LibraryHealth {
 
 export async function getLibraryHealth(user: ScopeUser): Promise<LibraryHealth | null> {
   if (user.role !== "admin") return null;
+  const embedding = getLlmEmbeddingConfig();
   // db_size below counts user-relation bytes, NOT pg_database_size(): the
   // latter overcounts via sparse pgroonga files (see the SQL comment).
   const { rows } = await query<{
@@ -260,18 +262,26 @@ export async function getLibraryHealth(user: ScopeUser): Promise<LibraryHealth |
        (SELECT count(*) FROM concept_versions)::int AS version_rows,
        (SELECT count(*) FROM attachments)::int AS attachment_rows,
        (SELECT COALESCE(sum(size_bytes), 0)::text FROM attachments) AS attachment_bytes,
-       (SELECT count(*) FROM concept_embeddings e
-          JOIN concepts c ON c.id = e.concept_id AND c.deleted_at IS NULL)::int AS embedding_rows,
-       (SELECT count(*) FROM concept_embeddings e
+       (SELECT count(DISTINCT e.concept_id) FROM concept_embedding_chunks e
+          JOIN concepts c ON c.id = e.concept_id AND c.deleted_at IS NULL
+          JOIN concept_versions v ON v.concept_id=c.id AND v.version_number=c.current_version
+          WHERE e.content_hash=v.content_hash AND e.source_title=c.title
+            AND e.source_description IS NOT DISTINCT FROM c.description
+            AND e.embedding_endpoint=$1 AND e.model=$2 AND e.dimensions=$3)::int AS embedding_rows,
+       (SELECT count(DISTINCT e.concept_id) FROM concept_embedding_chunks e
           JOIN concepts c ON c.id = e.concept_id AND c.deleted_at IS NULL
           JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
-          WHERE e.content_hash IS DISTINCT FROM v.content_hash)::int AS embedding_stale,
+          WHERE e.content_hash IS DISTINCT FROM v.content_hash OR e.source_title IS DISTINCT FROM c.title
+            OR e.source_description IS DISTINCT FROM c.description
+            OR e.embedding_endpoint IS DISTINCT FROM $1 OR e.model IS DISTINCT FROM $2
+            OR e.dimensions IS DISTINCT FROM $3)::int AS embedding_stale,
        -- db_size = user-relation bytes (tables + indexes + toast), not
        -- pg_database_size(): pgroonga's on-disk files are sparse and their
        -- apparent size dominated that metric (~294MB reported vs ~23MB real).
        pg_size_pretty(COALESCE((SELECT sum(pg_total_relation_size(c.oid))
           FROM pg_class c
           WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r'), 0)) AS db_size`,
+    [embedding?.baseUrl ?? "", embedding?.model ?? "", embedding?.dimensions ?? 0],
   );
   const r = rows[0];
   const live = r.concepts_total;

@@ -9,6 +9,8 @@ export interface ApiKeyItem {
   createdAt: string;
   lastUsedAt: string | null;
   revokedAt: string | null;
+  accessMode: "read" | "write" | "admin";
+  expiresAt: string | null;
 }
 
 function fmtTime(iso: string | null): string {
@@ -22,6 +24,7 @@ export function ApiKeysPanel({ initial }: { initial: ApiKeyItem[] }) {
   const router = useRouter();
   const [keys, setKeys] = useState(initial);
   const [name, setName] = useState("");
+  const [accessMode, setAccessMode] = useState<"read" | "write">("write");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
@@ -43,7 +46,7 @@ export function ApiKeysPanel({ initial }: { initial: ApiKeyItem[] }) {
       const res = await fetch("/api/keys", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: name.trim() }),
+        body: JSON.stringify({ name: name.trim(), accessMode }),
       });
       const data = (await res.json().catch(() => ({}))) as { key?: string; error?: string };
       if (!res.ok) {
@@ -52,6 +55,7 @@ export function ApiKeysPanel({ initial }: { initial: ApiKeyItem[] }) {
       }
       setSecret(data.key ?? "");
       setName("");
+      setAccessMode("write");
       await refresh();
     } catch {
       setError("网络错误，请稍后重试");
@@ -108,6 +112,15 @@ export function ApiKeysPanel({ initial }: { initial: ApiKeyItem[] }) {
           className="w-56 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800"
           required
         />
+        <select
+          value={accessMode}
+          onChange={(e) => setAccessMode(e.target.value as "read" | "write")}
+          aria-label="密钥权限"
+          className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800"
+        >
+          <option value="write">读写</option>
+          <option value="read">只读</option>
+        </select>
         <button
           type="submit"
           disabled={busy}
@@ -127,6 +140,8 @@ export function ApiKeysPanel({ initial }: { initial: ApiKeyItem[] }) {
                 <span className={`text-sm font-medium ${k.revokedAt ? "line-through opacity-60" : ""}`}>{k.name}</span>
                 <span className="ml-2 text-xs text-zinc-400 dark:text-zinc-500">
                   创建 {fmtTime(k.createdAt)} · 最近使用 {fmtTime(k.lastUsedAt)}
+                  · 权限 {k.accessMode === "read" ? "只读" : k.accessMode === "write" ? "读写" : "管理员"}
+                  {k.expiresAt && ` · 到期 ${fmtTime(k.expiresAt)}`}
                   {k.revokedAt && ` · 已于 ${fmtTime(k.revokedAt)} 吊销`}
                 </span>
               </div>

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { getSession } from "./auth";
-import { getUserByApiKey } from "./apiKey";
+import { getUserByApiKey, hasBearerAuthorization, type ApiKeyAccessMode } from "./apiKey";
 import { query } from "./db";
 
 export interface AuthUser {
@@ -13,6 +14,9 @@ export interface AuthUser {
    * attribution handle that search/LLM/request logs store for per-key usage
    * stats. Cookie sessions leave it unset. */
   apiKeyId?: string;
+  /** Set only for Bearer-authenticated calls; browser sessions retain their
+   * actual account role and never receive a key scope. */
+  apiKeyAccessMode?: ApiKeyAccessMode;
 }
 
 /** Owner-scoping only needs identity + role; lib functions take this shape.
@@ -61,8 +65,12 @@ export async function requireUser(): Promise<AuthUser> {
  * browser requests keep using the httpOnly session cookie.
  */
 export async function requireApiUser(): Promise<AuthUser | null> {
-  const viaKey = await getUserByApiKey();
-  if (viaKey) return viaKey;
+  const requestHeaders = await headers();
+  if (hasBearerAuthorization(requestHeaders.get("authorization"))) {
+    // Never allow an invalid, expired, revoked, or malformed Bearer credential
+    // to borrow authority from a simultaneously-present browser cookie.
+    return getUserByApiKey();
+  }
   const session = await getSession();
   if (!session) return null;
   const { rows } = await query<{ id: string; username: string; token_version: number; role: string; disabled_at: string | null }>(

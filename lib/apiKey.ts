@@ -3,6 +3,9 @@ import { headers } from "next/headers";
 import { query } from "./db";
 import type { AuthUser } from "./requireUser";
 
+export const API_KEY_ACCESS_MODES = ["read", "write", "admin"] as const;
+export type ApiKeyAccessMode = (typeof API_KEY_ACCESS_MODES)[number];
+
 /**
  * Bearer API-key authentication for machine clients (personal-kb MCP).
  *
@@ -16,21 +19,35 @@ import type { AuthUser } from "./requireUser";
 
 /** Minimum shape of a well-formed key: prefix + 32 hex chars. */
 export function extractBearerKey(authHeader: string | null): string | null {
-  if (!authHeader?.startsWith("Bearer ")) return null;
-  const key = authHeader.slice("Bearer ".length).trim();
+  if (!hasBearerAuthorization(authHeader)) return null;
+  const key = authHeader!.replace(/^Bearer\s*/i, "").trim();
   return /^pkb_[0-9a-f]{32,}$/.test(key) ? key : null;
+}
+
+/** True when a request attempted Bearer authentication, even if the supplied
+ * credential is malformed. Callers must not then fall back to a cookie. */
+export function hasBearerAuthorization(authHeader: string | null): boolean {
+  return /^Bearer(?:\s|$)/i.test(authHeader ?? "");
 }
 
 export function hashApiKey(key: string): string {
   return createHash("sha256").update(key).digest("hex");
 }
 
+/** Effective role for a Bearer-authenticated request. Keeping this separate
+ * makes the no-admin-escalation rule auditable and unit-testable. */
+export function effectiveApiKeyRole(
+  ownerRole: string,
+  accessMode: ApiKeyAccessMode,
+): "user" | "admin" {
+  return accessMode === "admin" && ownerRole === "admin" ? "admin" : "user";
+}
+
 /**
  * Resolve the caller from the `Authorization: Bearer pkb_...` header.
- * Returns null when no (well-formed) Bearer header is present — the caller
- * should fall back to the cookie session — or when the key is unknown or
- * revoked. A request that PRESENTS a key is answered by that key alone:
- * an invalid key never falls back to cookies.
+ * Returns null when no usable key is present, or when it is unknown, revoked,
+ * or expired. Callers use hasBearerAuthorization() to distinguish no Bearer
+ * credential (cookie fallback is allowed) from a rejected Bearer credential.
  */
 export async function getUserByApiKey(): Promise<AuthUser | null> {
   const h = await headers();
@@ -38,11 +55,20 @@ export async function getUserByApiKey(): Promise<AuthUser | null> {
   if (!key) return null;
 
   const hash = hashApiKey(key);
-  const { rows } = await query<{ id: string; username: string; token_version: number; role: string; api_key_id: string }>(
-    `SELECT u.id, u.username, u.token_version, u.role, k.id AS api_key_id
+  const { rows } = await query<{
+    id: string;
+    username: string;
+    token_version: number;
+    role: string;
+    api_key_id: string;
+    access_mode: ApiKeyAccessMode;
+  }>(
+    `SELECT u.id, u.username, u.token_version, u.role, k.id AS api_key_id, k.access_mode
      FROM api_keys k
      JOIN users u ON u.id = k.user_id AND u.disabled_at IS NULL
-     WHERE k.key_hash = $1 AND k.revoked_at IS NULL`,
+     WHERE k.key_hash = $1
+       AND k.revoked_at IS NULL
+       AND (k.expires_at IS NULL OR k.expires_at > now())`,
     [hash]
   );
   if (rows.length === 0) return null;
@@ -53,12 +79,19 @@ export async function getUserByApiKey(): Promise<AuthUser | null> {
     () => {}
   );
 
+  const accessMode = rows[0].access_mode;
+  // A machine credential is never implicitly administrative merely because
+  // its owner is. Only an explicit admin-scoped key owned by an admin account
+  // carries the effective admin role.
+  const role = effectiveApiKeyRole(rows[0].role, accessMode);
+
   return {
     id: rows[0].id,
     username: rows[0].username,
     tokenVersion: rows[0].token_version,
-    role: rows[0].role === "admin" ? "admin" : "user",
+    role,
     apiKeyId: rows[0].api_key_id,
+    apiKeyAccessMode: accessMode,
   };
 }
 
@@ -75,7 +108,11 @@ export async function resolveKeyContext(
   const key = extractBearerKey(authHeader);
   if (!key) return null;
   const { rows } = await query<{ id: string; user_id: string }>(
-    "SELECT id, user_id FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL",
+    `SELECT k.id, k.user_id
+     FROM api_keys k JOIN users u ON u.id = k.user_id AND u.disabled_at IS NULL
+     WHERE k.key_hash = $1
+       AND k.revoked_at IS NULL
+       AND (k.expires_at IS NULL OR k.expires_at > now())`,
     [hashApiKey(key)]
   );
   return rows.length > 0 ? { apiKeyId: rows[0].id, userId: rows[0].user_id } : null;
@@ -87,6 +124,8 @@ export interface ApiKeyRow {
   createdAt: string;
   lastUsedAt: string | null;
   revokedAt: string | null;
+  accessMode: ApiKeyAccessMode;
+  expiresAt: string | null;
 }
 
 /** One account's keys for the /settings self-service panel (never the hash).
@@ -98,8 +137,10 @@ export async function listApiKeys(userId: string): Promise<ApiKeyRow[]> {
     created_at: string;
     last_used_at: string | null;
     revoked_at: string | null;
+    access_mode: ApiKeyAccessMode;
+    expires_at: string | null;
   }>(
-    `SELECT id, name, created_at, last_used_at, revoked_at
+    `SELECT id, name, created_at, last_used_at, revoked_at, access_mode, expires_at
      FROM api_keys WHERE user_id = $1
      ORDER BY (revoked_at IS NULL) DESC, created_at DESC`,
     [userId]
@@ -110,5 +151,7 @@ export async function listApiKeys(userId: string): Promise<ApiKeyRow[]> {
     createdAt: r.created_at,
     lastUsedAt: r.last_used_at,
     revokedAt: r.revoked_at,
+    accessMode: r.access_mode,
+    expiresAt: r.expires_at,
   }));
 }

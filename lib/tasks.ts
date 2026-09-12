@@ -1,5 +1,6 @@
-import { query } from "./db";
+import { getPool, query } from "./db";
 import type { ScopeUser } from "./requireUser";
+import { ModelLimitError, positiveLimit } from "./usage-guard";
 
 /** 异步任务表（迁移 0019）：让「比一次请求更久的活」有可轮询的持久记录。
  *
@@ -20,6 +21,23 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 /** 执行租约：超过它仍未结束的任务视为执行者已消失。问答正常 5-30 秒完成，
  * 5 分钟足够宽裕，也足够快地不让用户对着「进行中」干等。 */
 export const TASK_LEASE_SECONDS = 300;
+
+export interface TaskAdmissionState {
+  active: number;
+  minuteCalls: number;
+}
+
+/** Check the owner-level queue boundary before any background work is
+ * scheduled. This is separate from model admission because a task can perform
+ * parsing and retrieval before its first model call. */
+export function checkTaskAdmission(state: TaskAdmissionState): void {
+  if (state.active >= positiveLimit("TASK_USER_MAX_ACTIVE", 2)) {
+    throw new ModelLimitError("进行中的任务已达上限，请等待现有任务完成");
+  }
+  if (state.minuteCalls >= positiveLimit("TASK_USER_CALLS_PER_MINUTE", 10)) {
+    throw new ModelLimitError("任务提交过于频繁，请稍后重试");
+  }
+}
 
 export interface Task<TResult = unknown, TPayload = unknown> {
   id: string;
@@ -90,11 +108,37 @@ export async function enqueueTask(
   user: ScopeUser,
   input: { kind: TaskKind; payload: unknown }
 ): Promise<string> {
-  const { rows } = await query<{ id: string }>(
-    "INSERT INTO tasks (owner_id, kind, payload) VALUES ($1, $2, $3::jsonb) RETURNING id",
-    [user.id, input.kind, JSON.stringify(input.payload)]
-  );
-  return rows[0].id;
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    // Serialise admissions for this owner. The lock is transactional, so a
+    // rejected request never leaves state behind and different owners retain
+    // independent throughput.
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 271828))", [user.id]);
+    const { rows: admission } = await client.query<TaskAdmissionState>(
+      `SELECT
+        count(*) FILTER (
+          WHERE status IN ('queued', 'running')
+            AND coalesce(started_at, created_at) > now() - make_interval(secs => $2)
+        )::int AS active,
+        count(*) FILTER (WHERE created_at > now() - interval '1 minute')::int AS "minuteCalls"
+       FROM tasks
+       WHERE owner_id = $1`,
+      [user.id, TASK_LEASE_SECONDS]
+    );
+    checkTaskAdmission(admission[0]);
+    const { rows } = await client.query<{ id: string }>(
+      "INSERT INTO tasks (owner_id, kind, payload) VALUES ($1, $2, $3::jsonb) RETURNING id",
+      [user.id, input.kind, JSON.stringify(input.payload)]
+    );
+    await client.query("COMMIT");
+    return rows[0].id;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /** 原子领用：只有一次 queued → running 的转换能成功（并发/重复调用都只会有一个

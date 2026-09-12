@@ -1,5 +1,27 @@
 # personal-wiki MCP integration
 
+## Current contract: v0.11.0 (2026-09-13)
+
+- The MCP judge calls authenticated `POST /api/judge`; only the server holds
+  supplier credentials. `KB_LLM_*` client settings are no longer used.
+- The judge classifies complete documents and returns an exact candidate ID.
+  It never generates replacement content. Merge suggestions, failures, and
+  oversized material enter the review queue with the submitted full body;
+  an LLM verdict cannot automatically overwrite an existing concept.
+- API keys have `read`, `write`, or explicitly provisioned `admin` access and
+  optional expiry. Ordinary MCP keys use `write`: owner-scoped knowledge access,
+  no key/account administration or irreversible purge. Browser admin access is
+  unchanged. An expired/invalid Bearer key cannot fall back to a session cookie.
+- RAG citations may include `chunkStart` and `chunkEnd` UTF-16 offsets into the
+  current full body. Retrieval uses overlapping full-document chunks filtered
+  by source hash, metadata, endpoint, model, and dimensions.
+- Model admission and task submission have server-side concurrency, rate, and
+  token limits. HTTP 429 is actionable throttling; clients must not retry writes
+  automatically. See `OPERATIONS.md` for defaults.
+
+The versioned sections below document historical behavior; this section
+supersedes their client-side LLM and automatic-merge descriptions.
+
 The MCP client registration and protocol server name are `personal-wiki` as of
 2026-09-08 (MCP v0.7.1). Existing `kb_*` tool names, `KB_*` environment variables,
 API routes, and historical API-key labels remain compatible.

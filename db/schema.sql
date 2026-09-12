@@ -110,6 +110,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
   name         text NOT NULL,
   key_hash     text NOT NULL UNIQUE,    -- sha256 of the plaintext key; the
                                         -- plaintext is shown once at creation
+  access_mode  text NOT NULL DEFAULT 'write' CHECK (access_mode IN ('read', 'write', 'admin')),
+  expires_at   timestamptz,             -- NULL = does not expire
   created_at   timestamptz NOT NULL DEFAULT now(),
   last_used_at timestamptz,
   revoked_at   timestamptz

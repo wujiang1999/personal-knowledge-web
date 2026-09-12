@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { query } from "@/lib/db";
-import { listApiKeys } from "@/lib/apiKey";
+import { listApiKeys, type ApiKeyAccessMode } from "@/lib/apiKey";
 import { requireApiUser } from "@/lib/requireUser";
 import { withRoute } from "@/lib/withRoute";
 
@@ -23,6 +23,11 @@ export const GET = withRoute("GET /api/keys", async () => {
 
 const createSchema = z.object({
   name: z.string().trim().min(1).max(64),
+  // The browser console only creates least-privilege read/write keys. An
+  // admin-scoped credential is an explicit operational action (CLI) and its
+  // owner must already be an admin account.
+  accessMode: z.enum(["read", "write"]).optional().default("write"),
+  expiresAt: z.string().datetime({ offset: true }).nullable().optional(),
 });
 
 export const POST = withRoute("POST /api/keys", async (req: Request) => {
@@ -35,9 +40,14 @@ export const POST = withRoute("POST /api/keys", async (req: Request) => {
   } catch {
     return NextResponse.json({ error: "invalid request" }, { status: 400 });
   }
+  if (body.expiresAt && new Date(body.expiresAt).getTime() <= Date.now()) {
+    return NextResponse.json({ error: "expiresAt must be in the future" }, { status: 400 });
+  }
 
   const { rows: active } = await query<{ n: number }>(
-    "SELECT count(*)::int AS n FROM api_keys WHERE user_id = $1 AND revoked_at IS NULL",
+    `SELECT count(*)::int AS n FROM api_keys
+     WHERE user_id = $1 AND revoked_at IS NULL
+       AND (expires_at IS NULL OR expires_at > now())`,
     [user.id]
   );
   if (active[0].n >= MAX_ACTIVE_KEYS) {
@@ -50,13 +60,27 @@ export const POST = withRoute("POST /api/keys", async (req: Request) => {
   // Same shape as the CLI minted: pkb_ + 48 hex chars.
   const key = `pkb_${randomBytes(24).toString("hex")}`;
   const keyHash = createHash("sha256").update(key).digest("hex");
-  const { rows } = await query<{ id: string; created_at: string }>(
-    "INSERT INTO api_keys (user_id, name, key_hash) VALUES ($1, $2, $3) RETURNING id, created_at",
-    [user.id, body.name, keyHash]
+  const { rows } = await query<{
+    id: string;
+    created_at: string;
+    access_mode: ApiKeyAccessMode;
+    expires_at: string | null;
+  }>(
+    `INSERT INTO api_keys (user_id, name, key_hash, access_mode, expires_at)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, created_at, access_mode, expires_at`,
+    [user.id, body.name, keyHash, body.accessMode, body.expiresAt ?? null]
   );
 
   return NextResponse.json(
-    { id: rows[0].id, name: body.name, created_at: rows[0].created_at, key },
+    {
+      id: rows[0].id,
+      name: body.name,
+      created_at: rows[0].created_at,
+      accessMode: rows[0].access_mode,
+      expiresAt: rows[0].expires_at,
+      key,
+    },
     { status: 201 }
   );
 });
