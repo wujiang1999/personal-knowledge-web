@@ -3,7 +3,7 @@ import { z } from "zod";
 import { query } from "@/lib/db";
 import { verifyPassword, hashPassword } from "@/lib/password";
 import { requireApiUser } from "@/lib/requireUser";
-import { createSession } from "@/lib/auth";
+import { destroySession } from "@/lib/auth";
 import { withRoute } from "@/lib/withRoute";
 
 const schema = z.object({
@@ -32,13 +32,12 @@ export const POST = withRoute("POST /api/auth/change-password", async (req: Requ
   if (!ok) return NextResponse.json({ error: "current password is incorrect" }, { status: 400 });
 
   const newHash = await hashPassword(body.newPassword);
-  // Bump token_version so every previously issued JWT dies, then re-issue a
-  // fresh session so the current user isn't logged out by the change.
+  // Bump token_version: every previously issued JWT dies, including this one.
+  // Clear the cookie too (same rationale as logout — the Edge proxy verifies
+  // only the signature and would otherwise keep treating the stale cookie as
+  // a live session). The UI then redirects to /login, so re-authentication
+  // with the new password is mandatory; the old cookie cannot resurrect it.
   await query("UPDATE users SET password_hash = $1, token_version = token_version + 1 WHERE id = $2", [newHash, user.id]);
-  const { rows: fresh } = await query<{ id: string; username: string; token_version: number }>(
-    "SELECT id, username, token_version FROM users WHERE id = $1",
-    [user.id]
-  );
-  await createSession({ id: fresh[0].id, username: fresh[0].username, tokenVersion: fresh[0].token_version });
+  await destroySession();
   return NextResponse.json({ ok: true });
 });

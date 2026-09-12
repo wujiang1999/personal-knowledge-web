@@ -125,6 +125,8 @@ BM25 + embedding 混合，五级降级链，任何一级失败都退化而不是
    Bearer 头直接放行给路由层裁决（中间件不能查库）。
 2. **会话**（`lib/auth.ts` + `lib/requireUser.ts`）——HS256 JWT（httpOnly、SameSite=Lax、7 天）；
    `token_version` 是权威吊销位：改密/登出/被禁用/被重置都 bump tv，服务端查库不匹配即失效。
+   改密时**当前会话一并下线**：路由 bump tv 后清 Cookie（与 logout 同理由：Edge 验签不查库，
+   陈旧 cookie 会被当成有效会话），UI 跳回 `/login`，必须用新密码重新登录（OWASP 建议）。
    签名有效但 tv 过期的会话经 `/api/auth/expire` 清 Cookie 回登录页 —— 消解过两次
    /login↔/dashboard 重定向死循环（08-28、09-04 事故）的结构性修复。
 3. **API key**（`lib/apiKey.ts`）——`Authorization: Bearer pkb_<48hex>`，服务端只存 SHA-256；
@@ -146,7 +148,7 @@ BM25 + embedding 混合，五级降级链，任何一级失败都退化而不是
 | 资源 | 方法 | 说明 |
 |---|---|---|
 | `/api/health` | GET | 免鉴权存活探针（`{ok,db}` + DB roundtrip），deploy/监控专用 |
-| `/api/auth/login|logout|change-password` | POST | 会话生命周期；`/api/auth/expire` GET 清 Cookie |
+| `/api/auth/login|logout|change-password` | POST | 会话生命周期；改密强制全端下线重新登录；`/api/auth/expire` GET 清 Cookie |
 | `/api/me` | GET | 识别调用者（cookie 或 key）——`kb_whoami` 的落点 |
 | `/api/concepts` | GET, POST | 列表/创建（POST 正文全同 → 409 + `existingId/existingTitle`） |
 | `/api/concepts/[id]` | GET, PATCH, DELETE | 详情（含版本）/ 存新版本（同哈希→元数据 only）/ 软删除，`?purge=1` 真删 |

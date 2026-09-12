@@ -34,8 +34,10 @@ export function ChangePasswordForm() {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        setMessage({ ok: true, text: "密码已修改" });
-        (e.target as HTMLFormElement).reset();
+        setMessage({ ok: true, text: "密码已修改，请使用新密码重新登录" });
+        setTimeout(() => {
+          window.location.href = "/login";
+        }, 1200);
       } else {
         setMessage({ ok: false, text: data.error ?? "修改失败" });
       }
@@ -70,6 +72,9 @@ export function ChangePasswordForm() {
       >
         {loading ? "提交中…" : "修改密码"}
       </button>
+      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        修改后所有已登录会话（含本设备）立即失效，需用新密码重新登录。
+      </p>
     </form>
   );
 }
