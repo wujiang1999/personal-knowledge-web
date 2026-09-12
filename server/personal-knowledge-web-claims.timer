@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly claim audit for personal-knowledge-web (Sunday 05:00 local)
+
+[Timer]
+OnCalendar=Sun *-*-* 05:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

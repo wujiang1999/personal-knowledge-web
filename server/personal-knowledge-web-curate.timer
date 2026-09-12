@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly curation report for personal-knowledge-web (Saturday 05:00 local)
+
+[Timer]
+OnCalendar=Sat *-*-* 05:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=personal-knowledge-web weekly curation report (npm run curate, read-only)
+After=postgresql.service network-online.target
+Wants=postgresql.service network-online.target
+OnFailure=kb-alert@%n.service
+
+[Service]
+Type=oneshot
+User=knowledge-web
+Group=knowledge-web
+WorkingDirectory=/opt/personal-knowledge-web
+Environment=HOME=/var/lib/knowledge-web
+ExecStart=/usr/bin/npm run curate

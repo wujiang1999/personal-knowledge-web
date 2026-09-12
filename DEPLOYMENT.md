@@ -61,6 +61,31 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 ## 变更历史
 
+- 2026-09-12（性能与卫生批次：死索引清理 + 向量自愈 + 查询缓存 + 周度节奏，bb05e32）：
+  stats 实测驱动的一批。**① 死索引清理（迁移 0020）**——09-04 检索改造后 pgroonga/tsquery
+  代码路径已全部移除，但 `idx_versions_body_pgroonga`/`idx_concepts_title_pgroonga`/
+  `idx_versions_tsv` 与 `content_tsv` 列留在库中，每次写版本都在白维护两套 Groonga 倒排 +
+  tsvector 触发器；且 pgroonga 落盘文件是稀疏文件，`pg_database_size`/`du -sb` 读 apparent
+  体积虚报 294MB（实际 22MB）。0020 drop 三索引+触发器+函数+列，schema.sql 摘除 pgroonga
+  依赖，0007/0008 改按扩展/列存在性守卫（照 0013 模式，无 pgroonga 包的全新装机也能干净
+  迁移）；顺带 `DROP EXTENSION pgroonga` 并清除孤儿 `pgrn.*`（drop 不删文件，root shell
+  glob 清理），库体积 294MB → **15MB**；pg_trgm 保留（错字兜底仍用）。**② stats db_size
+  修正**——`pg_database_size()` 换成用户表+索引+toast 真实字节口径（/stats "DB 体积"
+  294MB → 6480 kB）。**③ 向量覆盖率自愈**——手动 backfill 把 15/47 补到 **47/47（100%）**；
+  新增 `queueConceptEmbedding`（lib/semantic.ts）：createConcept/addConceptVersion 提交后
+  fire-and-forget upsert（与 embed-backfill 同文本构造/同 upsert，purpose=backfill 归因经
+  route/reviews/review 调用方透传），失败仅记日志、由下一次写入或 backfill 自愈——覆盖率
+  不再依赖手动脚本。线上验证：MCP 建临时条目 → `concept_embeddings` 立即出现该行（188ms）
+  → purge 后 CASCADE 清除。**④ 查询向量 LRU**——`cachedQueryVector`（TTL 1h / 200 条，
+  `QUERY_EMBED_CACHE_TTL_MS`/`QUERY_EMBED_CACHE_MAX` 可调）：重复查询免 300-700ms 跨境
+  embedding 调用。线上验证：同 query 在 >60s 结果缓存过期后再查，无新 search-embed 调用，
+  took_ms 293→101ms。**⑤ favicon**——`app/icon.png` 1254px/556KB → 64px/4.6KB（每页 head
+  直接受益）。**⑥ 周度运维节奏**——新增 `personal-knowledge-web-claims.timer`（周日 05:00，
+  `npm run claims -- --write`，矛盾自动进审核队列）与 `personal-knowledge-web-curate.timer`
+  （周六 05:00，只读报告）；OnFailure 走既有 kb-alert@ 通知链。**⑦ 判别面核实（无改动）**
+  ——judge 关 thinking 已于 09-10 默认生效（线上 judge completion tokens 21-30），三处 MCP
+  客户端 env 均未设 `KB_LLM_THINKING`；DashScope 国际版端点实测现有 CN key 返回 401，
+  仍待国际版 key（遗留，09-04 已记录）。本地 182 测试 + 生产构建过，deploy.sh 门禁部署。
 - 2026-09-10（Claim 矛盾审计：纠错闭环的另一半）：写入侧早有查重（409 + 判别），但**存量条目之间的矛盾从来没人发现**——两个条目各说各话、数值相反，只有人正好同时读到才会察觉。本批把「Claim 抽取」按最小可用口径落地：`npm run claims [--id <uuid>] [--max N] [--write]`。**① `lib/claims.ts`**——抽取提示要求"可判断真伪的原子陈述"，把提问句/目录句/过渡句挡在外面（`parseClaims`：去重、截断 200 字、单条上限 8 条）；每条主张用既有混合检索回查库内相关条目（排除自身），**先过相关度门槛**（复用问答那套「库里有没有相关内容」的标定：有相似度按 0.25、纯词法按 5），低于门槛直接跳过——找不到落脚点的主张做矛盾判定只是白烧一次调用；有候选才让模型判 `consistent|contradicts|unrelated`。**② 落点解析取保守口径**——`parseClaimVerdict` 接受截断 id 或标题匹配（模型会改写长 uuid），对不上就**降级成 unrelated**：宁可漏报一条，也不把找不到落点的判定送进队列。**③ 矛盾入队**——`--write` 时把矛盾作为 `conflict` 写进审核队列（新增来源 `source=claims`，标签「Claim 审计」），候选内容就是那条主张本身（正文带出处：《源条目》+ 原句片段 + 判定理由），于是四种裁决都有意义：采用新内容=修正目标条目、合并=人工改写、分别保留=把主张建为新条目、保留旧内容=驳回。**④ 默认只读**——与 `ingest`/`curate` 同一惯例：dry-run 打印条目数/主张数/判定数/跳过数/矛盾清单，`--write` 才落库。测试 `tests/claims.test.ts` 8 条（抽取清洗、越界 id 降级、判定枚举）。本地 `npm run check` 182 测试 + `npm run build` 通过。
 - 2026-09-10（弱候选短路 + 批量维护任务）：上一批观察到的两处立即可做的改进。**① ask 弱候选短路**——无关提问此前也会走完整条链路烧一次 LLM：这个 41 条的库里混合检索几乎从不空手而归（trgm 兜底 + 语义召回总能凑出几条），原「检索为空」短路形同虚设。先标定再动手：10 个问题线上检索 top-1 —— 相关题相似度 0.34/0.50/0.63、纯词法 8.26/29.48；无关题相似度 0.12/0.15/0.16、纯词法 3.68。据此定两条门槛：**有相似度按相似度判（< 0.25 太弱），没有相似度（纯词法路径）按词法分判（< 5 太弱）**，命中即直接回「检索到的内容与这个问题关联太弱（最高相似度 x）」并把命中的条目列出来，不调 LLM。**已知漏网**：语义兜底对无关短串也会打出 0.31 相似度 + 合成分 100（合成分不能用），这类会放行、由模型自己回「资料里没有」——宁可多烧一次，也不把相关提问误判成无关（标定集上 9/10 正确分类、零假阴性）。两个门槛可用 `ASK_MIN_SIMILARITY` / `ASK_MIN_SCORE` 覆盖（`.env.example` 已写），换语料或库量级变化后应重标。**② 批量维护任务（任务表第二个生产者）**——`kind=resummarize`：一键补齐缺描述的条目（`POST /api/tasks`，≤50 条/次，同类任务在飞行中复用），每条落一次进度（新增 `progressTask`，只更新 result 不动状态），刷新页面也不丢；`/settings` 新增「维护」区带按钮与 x/y 进度。顺手把 `LLM_AUTO_SUMMARY` 开关从 `generateSummaryForConcept` 移到 `maybeQueueAutoSummary`：它管的是「每次保存后的自动花费」，不该拦住用户显式发起的批量补齐（自动路径行为不变）。任务轮询从 AskPanel 抽出 `lib/task-poll`（间隔/超时/「超时不等于失败」只有一处定义），问答面板与维护按钮共用。**③ 端点暴露口径**——`POST /api/tasks` 有意不暴露为 MCP 工具（与账号管理同类：全库 LLM 消耗 + 人为触发的维护动作），已在两份 README 的契约章节写明。本地 `npm run check` 174 测试（新增弱候选 2）+ `npm run build` 通过。
 - 2026-09-10（异步任务表 + 知识问答批次）：规划里两个推迟项的合并落地——问答合成要 5-30 秒，塞进一个 HTTP 请求既撞超时也没法离开页面再回来取结果，于是**任务表**先有了真实生产者，不再是空转基础设施。**① 迁移 0019 `tasks`**——`queued → running → done|failed` 状态机 + `payload`/`result` jsonb + `attempts`；执行者是进程内 fire-and-forget（与自动摘要、用量日志同一套约定，本部署没有 worker），因此设**执行租约**：`coalesce(started_at, created_at)` 超过 5 分钟的任务在下一次读取时被判 failed，且区分「入队后未被启动」与「执行中进程消失」两种文案——单实例部署里"永远显示进行中"是最坏的失败形态，宁可明确判死。租约清理挂在读取路径（getTask/listTasks 先清后读），没有定时器。自动重试本批不做（问答不写库，重试的唯一收益是绕过偶发失败，让用户重问更简单）。**② RAG 带引用问答**（`lib/ask.ts` + `/ask` 页 + `POST /api/ask` + `GET /api/tasks[/id]`）——检索复用既有混合检索（BM25+语义 RRF，`source=api`，命中照常计 retrieval_count），随后把 top-k 的**全文**（搜索只给 500 字窗口，不够作答；一条 `ANY(ids)` 取回）按 `[n]` 编号喂给 LLM，提示词三条硬规则：只用资料、逐句标来源编号、资料不足就直说。`parseAskAnswer` 把 `[n]` 解析成条目 id 并**删掉越界编号**（模型会引用不存在的 `[7]`，留着就是点不开的假引用），答案里的 Markdown 由 `ConceptBody` 在服务端渲染（客户端不引 markdown 库）。检索为空时不烧 LLM，直接回「没检索到」。**③ 抗重复与可回看**——同一问题在飞行中直接复用该任务（双击/客户端重试的挡板）；问答历史留在任务行，`/ask` 页可回看答案与出处；`/logs` 的 purpose 增加「知识问答」。**④ MCP v0.10.0 同步**——新增 `kb_ask`（服务端同步等待，超时返回 `taskId` 而不是丢答案），工具数 21→22，README 工具参考/Agent 守则/典型工作流同步。**⑤ MCP judge 关 thinking（09-04 记录的待决权衡，本批实测后落地）**——判别是「给定材料做短判决」的机械任务，reasoning tokens 基本是延迟。实测（线上端点、同一输入）：短判决（ok/conflict）thinking 开 **1.1-2.0s / 80-264 completion tokens**、关 **0.6-1.0s / 24-54 tokens**；纯判决提示的直接 A/B 差距更大（6.2-6.8s / 1700-1842 tokens → 0.9-1.0s / 93-109 tokens）。**merge 判决两种模式都在 ~6.3-6.7s**——那颗成本在生成 mergedBody（1500+ tokens）而非推理，关思考省不掉。回归集三条（同题同文→merge、全新主题→ok、同题异内容→conflict）在开关两种模式下判定完全一致且均无规则降级。请求阶梯从两级（JSON 模式 → 纯 body）改为三级（JSON+关思考 → 关思考 → 纯 body），严格 provider 仍能落到可用调用。**残余风险与逃生开关**：A/B 用较薄的提示时，同一案例在关思考下从 merge 翻成 ok（判别质量确实吃推理），因此新增 `KB_LLM_THINKING=on` 恢复 provider 默认，README 配置表已写明；默认仍是关（快 2-7 倍）。本地 `npm run check` 172 测试（新增 ask 7）+ `npm run build` 通过；MCP 侧 typecheck + 87 测试通过。
