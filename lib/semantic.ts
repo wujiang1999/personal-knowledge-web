@@ -1,6 +1,6 @@
 import { getLlmEmbeddingConfig } from "./config";
 import { query } from "./db";
-import { llmEmbed } from "./llm";
+import { llmEmbed, type LlmCallMeta } from "./llm";
 import type { ScopeUser } from "./requireUser";
 import { operatorFilterClauses, type ParsedQuery } from "./search-syntax";
 
@@ -19,7 +19,7 @@ export async function hasSemanticSearch(): Promise<boolean> {
         `SELECT
            EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')
            AND to_regclass('public.concept_embeddings') IS NOT NULL
-         AS ok`
+         AS ok`,
       );
       semanticProbe = rows[0]?.ok === true && getLlmEmbeddingConfig() !== null;
     } catch {
@@ -36,9 +36,7 @@ export function toVectorLiteral(v: number[]): string {
 
 /** Reciprocal-rank fusion over ranked id lists (ids are opaque strings).
  * Classic k=60 constant; a list contributes 1/(60 + rank). */
-export function rrfMerge<T extends { id: string }>(
-  lists: T[][]
-): { item: T; rrf: number }[] {
+export function rrfMerge<T extends { id: string }>(lists: T[][]): { item: T; rrf: number }[] {
   const scores = new Map<string, { item: T; rrf: number }>();
   for (const list of lists) {
     list.forEach((item, rank) => {
@@ -68,29 +66,26 @@ export async function rerankWithSemantic<T extends { id: string; score: number }
   queryVector?: number[],
   /** Search-operator filters — constrain vector recall to the same scope
    * the lexical window was built from. */
-  filters?: ParsedQuery
+  filters?: ParsedQuery,
 ): Promise<T[]> {
   const vector =
     queryVector ??
-    (await llmEmbed([needle.slice(0, 4000)], {
-      purpose: "search-embed",
-      userId: user.id,
-      apiKeyId: user.apiKeyId,
-    }))[0];
+    (
+      await llmEmbed([needle.slice(0, 4000)], {
+        purpose: "search-embed",
+        userId: user.id,
+        apiKeyId: user.apiKeyId,
+      })
+    )[0];
   const semCands = await semanticCandidates(user, vector, Math.max(limit * 2, 20), filters);
   const simById = new Map(semCands.map((c) => [c.id, c.similarity]));
-  const fused = rrfMerge<{ id: string }>([
-    lexical,
-    semCands.map((c) => ({ id: c.id })),
-  ]);
+  const fused = rrfMerge<{ id: string }>([lexical, semCands.map((c) => ({ id: c.id }))]);
 
   const lexicalById = new Map(lexical.map((r) => [r.id, r]));
-  const semOnlyIds = fused
-    .filter((f) => !lexicalById.has(f.item.id))
-    .map((f) => f.item.id);
+  const semOnlyIds = fused.filter((f) => !lexicalById.has(f.item.id)).map((f) => f.item.id);
   const semRows = semOnlyIds.length ? await conceptRowsForIds(user, semOnlyIds) : [];
   const semById = new Map(
-    semRows.map((r) => [r.id, { ...r, score: 0, similarity: simById.get(r.id) } as unknown as T])
+    semRows.map((r) => [r.id, { ...r, score: 0, similarity: simById.get(r.id) } as unknown as T]),
   );
 
   const out: T[] = [];
@@ -99,7 +94,9 @@ export async function rerankWithSemantic<T extends { id: string; score: number }
     const row = lexicalById.get(item.id) ?? semById.get(item.id);
     if (!row) continue; // scope-filtered out (e.g. other owner's embedding)
     const similarity = simById.get(item.id);
-    const full = lexicalById.has(item.id) ? { ...row, similarity } : { ...row, score: Math.round(rrf * 100), similarity };
+    const full = lexicalById.has(item.id)
+      ? { ...row, similarity }
+      : { ...row, score: Math.round(rrf * 100), similarity };
     out.push(full as T);
   }
   return out;
@@ -115,13 +112,13 @@ export async function semanticCandidates(
   limit: number,
   /** Search-operator filters (tag:/category:/status:) — without them the
    * vector recall would leak rows the lexical path just filtered out. */
-  filters?: ParsedQuery
+  filters?: ParsedQuery,
 ): Promise<{ id: string; similarity: number }[]> {
   const params: unknown[] = [toVectorLiteral(queryVector)];
   // Alive filter first so trashed concepts never surface from stale embeddings
   // (the backfill only re-syncs on write; a soft delete leaves rows behind).
   const clauses = ["c.deleted_at IS NULL"];
-  if (user.role !== "admin") clauses.push(`c.owner_id = $${((params.push(user.id), params.length))}`);
+  if (user.role !== "admin") clauses.push(`c.owner_id = $${(params.push(user.id), params.length)}`);
   if (filters) clauses.push(...operatorFilterClauses(filters, params));
   const where = "WHERE " + clauses.join(" AND ");
   const { rows } = await query<{ id: string; similarity: number }>(
@@ -131,7 +128,7 @@ export async function semanticCandidates(
      ${where}
      ORDER BY ce.embedding <=> $1::vector
      LIMIT ${limit}`,
-    params
+    params,
   );
   return rows;
 }
@@ -140,7 +137,7 @@ export async function semanticCandidates(
  * window exists, so preview the head of the body). */
 export async function conceptRowsForIds(
   user: ScopeUser,
-  ids: string[]
+  ids: string[],
 ): Promise<
   {
     id: string;
@@ -187,7 +184,7 @@ export async function conceptRowsForIds(
      WHERE c.id = ANY($1::uuid[])
        AND c.deleted_at IS NULL
        ${user.role === "admin" ? "" : "AND c.owner_id = $2"}`,
-    user.role === "admin" ? [ids] : [ids, user.id]
+    user.role === "admin" ? [ids] : [ids, user.id],
   );
   // SearchResult models a missing owner as undefined (LEFT JOIN types as
   // nullable); coerce once so callers can assign directly.
@@ -212,9 +209,7 @@ export async function ensureSemanticSchema(): Promise<void> {
       created_at   timestamptz NOT NULL DEFAULT now()
     )
   `);
-  await query(
-    "CREATE INDEX IF NOT EXISTS idx_embeddings_owner ON concept_embeddings (owner_id)"
-  );
+  await query("CREATE INDEX IF NOT EXISTS idx_embeddings_owner ON concept_embeddings (owner_id)");
 }
 
 /**
@@ -235,15 +230,84 @@ export async function ensureEmbeddingDimension(dimensions: number): Promise<void
          ) THEN
            ALTER TABLE concept_embeddings ALTER COLUMN embedding TYPE vector(${dimensions});
          END IF;
-       END $$;`
+       END $$;`,
     );
     await query(
-      "CREATE INDEX IF NOT EXISTS idx_embeddings_hnsw ON concept_embeddings USING hnsw (embedding vector_cosine_ops)"
+      "CREATE INDEX IF NOT EXISTS idx_embeddings_hnsw ON concept_embeddings USING hnsw (embedding vector_cosine_ops)",
     );
   } catch (err) {
     console.error(
       "[semantic] dimension/index ensure failed (continuing unindexed):",
-      err instanceof Error ? err.message : err
+      err instanceof Error ? err.message : err,
     );
   }
+}
+
+// -------------------------------
+// query-embedding cache + write-path embedding sync
+// -------------------------------
+
+/** LRU cache of query embeddings. A text's vector is deterministic, so no
+ * invalidation is needed — a hit merely skips the cross-border embedding
+ * round trip (300-700ms) that search-embed otherwise pays per unique query. */
+const queryEmbedCache = new Map<string, { at: number; vector: number[] }>();
+const QUERY_EMBED_TTL_MS = Number(process.env.QUERY_EMBED_CACHE_TTL_MS ?? 3_600_000);
+const QUERY_EMBED_MAX = Number(process.env.QUERY_EMBED_CACHE_MAX ?? 200);
+
+/** Query vector for `needle` (already operator-stripped and normalized by the
+ * caller). Resolves from the LRU when fresh; otherwise one embedding call,
+ * attributed via `meta`. Throws on failure — callers degrade to lexical-only. */
+export async function cachedQueryVector(needle: string, meta?: LlmCallMeta): Promise<number[]> {
+  const hit = queryEmbedCache.get(needle);
+  if (hit && Date.now() - hit.at < QUERY_EMBED_TTL_MS) {
+    queryEmbedCache.delete(needle);
+    queryEmbedCache.set(needle, hit); // refresh LRU position
+    return hit.vector;
+  }
+  const vector = (await llmEmbed([needle], meta))[0];
+  if (queryEmbedCache.size >= QUERY_EMBED_MAX) {
+    const oldest = queryEmbedCache.keys().next().value;
+    if (oldest !== undefined) queryEmbedCache.delete(oldest);
+  }
+  queryEmbedCache.set(needle, { at: Date.now(), vector });
+  return vector;
+}
+
+/** Fire-and-forget embedding sync for version writes: keeps
+ * concept_embeddings at full coverage without manual backfill runs. Same text
+ * construction and upsert as scripts/embed-backfill.ts. Never blocks the
+ * write; failures are logged and swallowed — search degrades to lexical-only,
+ * and the next write (or `npm run db:embed-backfill`) repairs the row. */
+export function queueConceptEmbedding(input: {
+  conceptId: string;
+  ownerId: string;
+  contentHash: string;
+  title: string;
+  description: string | null;
+  body: string;
+  userId?: string | null;
+  apiKeyId?: string | null;
+}): void {
+  const cfg = getLlmEmbeddingConfig();
+  if (!cfg) return;
+  void (async () => {
+    const text = `${input.title}\n${input.description ?? ""}\n${input.body.slice(0, 6000)}`;
+    const vectors = await llmEmbed([text], {
+      purpose: "backfill",
+      userId: input.userId ?? null,
+      apiKeyId: input.apiKeyId ?? null,
+    });
+    await query(
+      `INSERT INTO concept_embeddings (concept_id, owner_id, content_hash, model, embedding)
+       VALUES ($1, $2, $3, $4, $5::vector)
+       ON CONFLICT (concept_id) DO UPDATE
+         SET owner_id = $2, content_hash = $3, model = $4, embedding = $5::vector, created_at = now()`,
+      [input.conceptId, input.ownerId, input.contentHash, cfg.model, toVectorLiteral(vectors[0])],
+    );
+  })().catch((err: unknown) => {
+    console.error(
+      "[semantic] write-path embed sync failed:",
+      err instanceof Error ? err.message : err,
+    );
+  });
 }

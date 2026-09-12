@@ -52,7 +52,7 @@ export async function getTrafficSummary(user: ScopeUser, days: number): Promise<
      FROM request_log
      WHERE created_at >= now() - make_interval(days => $1)
        ${isAdmin ? "" : "AND user_id = $2"}`,
-    isAdmin ? [days] : [days, user.id]
+    isAdmin ? [days] : [days, user.id],
   );
   const r = rows[0];
   return {
@@ -101,7 +101,7 @@ export async function getSearchQuality(user: ScopeUser, days: number): Promise<S
               COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY took_ms), 0)::int AS p95_ms
        FROM search_logs
        WHERE created_at >= now() - make_interval(days => $1) ${scopeSql}`,
-      params
+      params,
     ),
     query<{ mode: string; count: number; zero: number }>(
       `SELECT mode, count(*)::int AS count,
@@ -109,7 +109,7 @@ export async function getSearchQuality(user: ScopeUser, days: number): Promise<S
        FROM search_logs
        WHERE created_at >= now() - make_interval(days => $1) ${scopeSql}
        GROUP BY mode ORDER BY count DESC`,
-      params
+      params,
     ),
   ]);
   const s = summary.rows[0];
@@ -165,7 +165,7 @@ export async function getApiKeyUsage(user: ScopeUser, days: number): Promise<Key
      WHERE k.revoked_at IS NULL
      GROUP BY k.id, k.name, u.username, k.last_used_at
      ORDER BY calls DESC, k.created_at`,
-    [days]
+    [days],
   );
   return rows.map((r) => ({
     keyId: r.id,
@@ -205,7 +205,7 @@ export async function getTopRetrieved(user: ScopeUser, limit = 10): Promise<TopR
        ${isAdmin ? "" : "AND owner_id = $1"}
      ORDER BY retrieval_count DESC, last_retrieved_at DESC NULLS LAST
      LIMIT ${Math.max(1, Math.min(50, limit))}`,
-    isAdmin ? [] : [user.id]
+    isAdmin ? [] : [user.id],
   );
   return rows.map((r) => ({
     id: r.id,
@@ -238,6 +238,8 @@ export interface LibraryHealth {
 
 export async function getLibraryHealth(user: ScopeUser): Promise<LibraryHealth | null> {
   if (user.role !== "admin") return null;
+  // db_size below counts user-relation bytes, NOT pg_database_size(): the
+  // latter overcounts via sparse pgroonga files (see the SQL comment).
   const { rows } = await query<{
     concepts_total: number;
     deprecated_total: number;
@@ -264,7 +266,12 @@ export async function getLibraryHealth(user: ScopeUser): Promise<LibraryHealth |
           JOIN concepts c ON c.id = e.concept_id AND c.deleted_at IS NULL
           JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
           WHERE e.content_hash IS DISTINCT FROM v.content_hash)::int AS embedding_stale,
-       pg_size_pretty(pg_database_size(current_database())) AS db_size`
+       -- db_size = user-relation bytes (tables + indexes + toast), not
+       -- pg_database_size(): pgroonga's on-disk files are sparse and their
+       -- apparent size dominated that metric (~294MB reported vs ~23MB real).
+       pg_size_pretty(COALESCE((SELECT sum(pg_total_relation_size(c.oid))
+          FROM pg_class c
+          WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r'), 0)) AS db_size`,
   );
   const r = rows[0];
   const live = r.concepts_total;
@@ -300,7 +307,7 @@ let commitPromise: Promise<string> | null = null;
  * answer cannot change without a deploy, and a deploy restarts the process. */
 export function getBuildCommit(): Promise<string> {
   commitPromise ??= execFileAsync("git", ["-C", process.cwd(), "rev-parse", "HEAD"])
-    .then((r) => (r.stdout.trim() || "unknown"))
+    .then((r) => r.stdout.trim() || "unknown")
     .catch(() => "unknown");
   return commitPromise;
 }

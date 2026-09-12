@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { addConceptVersion, getConceptDetail, purgeConcept, trashConcept, type ConceptInput } from "@/lib/concepts";
+import {
+  addConceptVersion,
+  getConceptDetail,
+  purgeConcept,
+  trashConcept,
+  type ConceptInput,
+} from "@/lib/concepts";
 import { requireApiUser } from "@/lib/requireUser";
 import { isUuid, withRoute } from "@/lib/withRoute";
 import { maybeQueueAutoSummary } from "@/lib/summary";
@@ -26,7 +32,7 @@ export const GET = withRoute(
     const concept = await getConceptDetail(id, user);
     if (!concept) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json({ concept });
-  }
+  },
 );
 
 export const PATCH = withRoute(
@@ -59,10 +65,10 @@ export const PATCH = withRoute(
 
     // A NotFoundError from the version race (row deleted mid-request) maps to
     // 404 in withRoute.
-    const result = await addConceptVersion(id, input, user.username);
+    const result = await addConceptVersion(id, input, user.username, user);
     if (result.created) maybeQueueAutoSummary(id);
     return NextResponse.json({ version: result.version, created: result.created });
-  }
+  },
 );
 
 export const DELETE = withRoute(
@@ -80,10 +86,11 @@ export const DELETE = withRoute(
     if (purge === "1" || purge === "true") {
       const result = await purgeConcept(id, user);
       if (!result.ok) {
-        if (result.reason === "not-found") return NextResponse.json({ error: "Not found" }, { status: 404 });
+        if (result.reason === "not-found")
+          return NextResponse.json({ error: "Not found" }, { status: 404 });
         return NextResponse.json(
           { error: "条目不在回收站中：先 DELETE（软删除），再彻底删除" },
-          { status: 409 }
+          { status: 409 },
         );
       }
       return NextResponse.json({ ok: true, purged: true });
@@ -92,5 +99,5 @@ export const DELETE = withRoute(
     const ok = await trashConcept(id, user);
     if (!ok) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json({ ok: true, trashed: true });
-  }
+  },
 );

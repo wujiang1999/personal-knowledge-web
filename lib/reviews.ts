@@ -1,4 +1,10 @@
-import { addConceptVersion, createConcept, getConceptDetail, sha256Hex, type ConceptInput } from "./concepts";
+import {
+  addConceptVersion,
+  createConcept,
+  getConceptDetail,
+  sha256Hex,
+  type ConceptInput,
+} from "./concepts";
 import { query } from "./db";
 import type { AuthUser, ScopeUser } from "./requireUser";
 
@@ -64,7 +70,10 @@ export function normalizePayload(raw: unknown): ReviewPayload {
   const o = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
   const status = str(o.status, 16);
   const tags = Array.isArray(o.tags)
-    ? o.tags.map((t) => str(t, 64)).filter(Boolean).slice(0, 30)
+    ? o.tags
+        .map((t) => str(t, 64))
+        .filter(Boolean)
+        .slice(0, 30)
     : [];
   const description = str(o.description, 1000);
   const category = str(o.category, 200);
@@ -188,7 +197,7 @@ const SELECT_ITEM = `
  */
 export async function enqueueReview(
   user: ScopeUser,
-  input: EnqueueReviewInput
+  input: EnqueueReviewInput,
 ): Promise<string | null> {
   const payload: ReviewPayload = normalizePayload(input.payload);
   const contentHash = sha256Hex(input.payload.body);
@@ -215,14 +224,14 @@ export async function enqueueReview(
       input.similarity ?? null,
       input.score ?? null,
       input.reason ?? null,
-    ]
+    ],
   );
   return rows[0]?.id ?? null;
 }
 
 export async function listReviewItems(
   user: ScopeUser,
-  opts: { status: ReviewStatus; limit?: number; offset?: number }
+  opts: { status: ReviewStatus; limit?: number; offset?: number },
 ): Promise<ReviewItem[]> {
   const limit = Math.min(Math.max(1, Math.trunc(opts.limit ?? 50)), 200);
   const offset = Math.max(0, Math.trunc(opts.offset ?? 0));
@@ -233,7 +242,7 @@ export async function listReviewItems(
   const order = opts.status === "pending" ? "r.created_at DESC" : "r.resolved_at DESC NULLS LAST";
   const { rows } = await query<ReviewRow>(
     `${SELECT_ITEM} WHERE r.status = $1 ${scope} ORDER BY ${order} LIMIT $2 OFFSET $3`,
-    [opts.status, limit, offset, ...scopeParams]
+    [opts.status, limit, offset, ...scopeParams],
   );
   return rows.map(toItem);
 }
@@ -243,7 +252,7 @@ export async function countReviewItems(user: ScopeUser, status: ReviewStatus): P
   const scopeParams = user.role === "admin" ? [] : [user.id];
   const { rows } = await query<{ n: string }>(
     `SELECT count(*)::text AS n FROM review_items WHERE status = $1 ${scope}`,
-    [status, ...scopeParams]
+    [status, ...scopeParams],
   );
   return Number(rows[0]?.n ?? 0);
 }
@@ -251,7 +260,10 @@ export async function countReviewItems(user: ScopeUser, status: ReviewStatus): P
 export async function getReviewItem(id: string, user: ScopeUser): Promise<ReviewItem | null> {
   const scope = user.role === "admin" ? "" : "AND r.owner_id = $2";
   const scopeParams = user.role === "admin" ? [] : [user.id];
-  const { rows } = await query<ReviewRow>(`${SELECT_ITEM} WHERE r.id = $1 ${scope}`, [id, ...scopeParams]);
+  const { rows } = await query<ReviewRow>(`${SELECT_ITEM} WHERE r.id = $1 ${scope}`, [
+    id,
+    ...scopeParams,
+  ]);
   return rows.length ? toItem(rows[0]) : null;
 }
 
@@ -264,7 +276,11 @@ export type ResolveReviewResult =
       /** 是否真的产生了新版本：正文与目标当前版本逐字节相同时为 false。 */
       versionCreated: boolean | null;
     }
-  | { ok: false; reason: "not-found" | "already-resolved" | "target-missing" | "target-out-of-scope" | "empty-body" };
+  | {
+      ok: false;
+      reason:
+        "not-found" | "already-resolved" | "target-missing" | "target-out-of-scope" | "empty-body";
+    };
 
 export interface ResolveReviewOptions {
   /** merged 用：人工编辑后的正文（缺省回落候选正文）。 */
@@ -283,7 +299,7 @@ export async function resolveReview(
   id: string,
   action: ReviewAction,
   user: AuthUser,
-  opts: ResolveReviewOptions = {}
+  opts: ResolveReviewOptions = {},
 ): Promise<ResolveReviewResult> {
   const item = await getReviewItem(id, user);
   if (!item) return { ok: false, reason: "not-found" };
@@ -313,7 +329,8 @@ export async function resolveReview(
         body: nextBody,
         generatedBy: `human:${user.username}`,
       },
-      user.username
+      user.username,
+      user,
     );
     conceptId = item.targetConceptId;
     versionCreated = saved.created;
@@ -329,7 +346,7 @@ export async function resolveReview(
         status: item.payload.status,
         body: nextBody,
       },
-      user
+      user,
     );
   }
 
@@ -337,7 +354,7 @@ export async function resolveReview(
     `UPDATE review_items
         SET status = 'resolved', resolved_action = $2, resolved_concept_id = $3, resolved_at = now()
       WHERE id = $1 AND status = 'pending'`,
-    [id, action, conceptId]
+    [id, action, conceptId],
   );
   return { ok: true, action, conceptId, versionCreated };
 }

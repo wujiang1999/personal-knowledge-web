@@ -2,8 +2,14 @@ import { createHash } from "node:crypto";
 import { getPool, query } from "./db";
 import { deleteAttachmentFile } from "./attachments";
 import type { ScopeUser } from "./requireUser";
-import { conceptRowsForIds, hasSemanticSearch, rerankWithSemantic, semanticCandidates } from "./semantic";
-import { llmEmbed } from "./llm";
+import {
+  cachedQueryVector,
+  conceptRowsForIds,
+  hasSemanticSearch,
+  queueConceptEmbedding,
+  rerankWithSemantic,
+  semanticCandidates,
+} from "./semantic";
 import { BM25_B, BM25_K1, DEPRECATED_FACTOR, tokenizeQuery } from "./bm25";
 import { logRetrievalHits, logSearch, logWhereClause, type LogFilter } from "./logs";
 import { operatorFilterClauses, parseSearchQuery } from "./search-syntax";
@@ -19,7 +25,7 @@ export class NotFoundError extends Error {}
 export class DuplicateBodyError extends Error {
   constructor(
     public readonly existingId: string,
-    public readonly existingTitle: string
+    public readonly existingTitle: string,
   ) {
     super(`内容与已有条目「${existingTitle}」完全相同，请直接编辑该条目`);
     this.name = "DuplicateBodyError";
@@ -153,7 +159,7 @@ export async function countConcepts(user: ScopeUser, category?: string): Promise
   }
   const { rows } = await query<{ n: number }>(
     `SELECT count(*)::int AS n FROM concepts c WHERE ${where.join(" AND ")}`,
-    params
+    params,
   );
   return rows[0]?.n ?? 0;
 }
@@ -173,7 +179,10 @@ export interface CategoryTreeNode {
  */
 const collator = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "variant" });
 
-export function buildCategoryTree(concepts: Concept[], extraFolderPaths: string[] = []): {
+export function buildCategoryTree(
+  concepts: Concept[],
+  extraFolderPaths: string[] = [],
+): {
   rootConcepts: Concept[];
   roots: CategoryTreeNode[];
 } {
@@ -248,11 +257,14 @@ export function rewriteCategoryPath(category: string, from: string, to: string):
 }
 
 export type CategoryOpResult =
-  | { ok: true; affected: number }
-  | { ok: false; code: "invalid" | "conflict"; message: string };
+  { ok: true; affected: number } | { ok: false; code: "invalid" | "conflict"; message: string };
 
 /** Rename a folder (rewrite `path` → `newPath`) for every concept in scope. */
-export async function renameCategoryFolder(user: ScopeUser, path: string, newPath: string): Promise<CategoryOpResult> {
+export async function renameCategoryFolder(
+  user: ScopeUser,
+  path: string,
+  newPath: string,
+): Promise<CategoryOpResult> {
   const from = normalizeCategory(path);
   const to = normalizeCategory(newPath);
   if (!from || !to) return { ok: false, code: "invalid", message: "路径不能为空" };
@@ -274,7 +286,7 @@ export async function renameCategoryFolder(user: ScopeUser, path: string, newPat
     // Both entity forms can occupy it: empty-folder rows and concept categories.
     const conflict = await client.query(
       `SELECT 1 FROM concepts WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
-      [to, escapeLike(to), ...scopeParams]
+      [to, escapeLike(to), ...scopeParams],
     );
     if ((conflict.rowCount ?? 0) > 0) {
       await client.query("ROLLBACK");
@@ -282,7 +294,7 @@ export async function renameCategoryFolder(user: ScopeUser, path: string, newPat
     }
     const conflictFolder = await client.query(
       `SELECT 1 FROM folders WHERE (path = $1 OR path LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
-      [to, escapeLike(to), ...scopeParams]
+      [to, escapeLike(to), ...scopeParams],
     );
     if ((conflictFolder.rowCount ?? 0) > 0) {
       await client.query("ROLLBACK");
@@ -291,13 +303,13 @@ export async function renameCategoryFolder(user: ScopeUser, path: string, newPat
     // A folder exists when concepts, folder rows, or both occupy the subtree.
     const source = await client.query(
       `SELECT 1 FROM concepts WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
-      [from, escapeLike(from), ...scopeParams]
+      [from, escapeLike(from), ...scopeParams],
     );
     let exists = (source.rowCount ?? 0) > 0;
     if (!exists) {
       const sourceFolder = await client.query(
         `SELECT 1 FROM folders WHERE (path = $1 OR path LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
-        [from, escapeLike(from), ...scopeParams]
+        [from, escapeLike(from), ...scopeParams],
       );
       exists = (sourceFolder.rowCount ?? 0) > 0;
     }
@@ -309,14 +321,14 @@ export async function renameCategoryFolder(user: ScopeUser, path: string, newPat
       `UPDATE concepts
        SET category = CASE WHEN category = $1 THEN $2 ELSE $2 || substring(category FROM length($1) + 1) END
        WHERE (category = $1 OR category LIKE $3 || '/%')${ownerClauseUpdate}`,
-      user.role === "admin" ? [from, to, escapeLike(from)] : [from, to, escapeLike(from), user.id]
+      user.role === "admin" ? [from, to, escapeLike(from)] : [from, to, escapeLike(from), user.id],
     );
     // Rewrite the entity form of the folder (and its empty subfolders) too.
     await client.query(
       `UPDATE folders
        SET path = CASE WHEN path = $1 THEN $2 ELSE $2 || substring(path FROM length($1) + 1) END
        WHERE (path = $1 OR path LIKE $3 || '/%')${ownerClauseUpdate}`,
-      user.role === "admin" ? [from, to, escapeLike(from)] : [from, to, escapeLike(from), user.id]
+      user.role === "admin" ? [from, to, escapeLike(from)] : [from, to, escapeLike(from), user.id],
     );
     await client.query("COMMIT");
     invalidateSearchCache();
@@ -331,7 +343,10 @@ export async function renameCategoryFolder(user: ScopeUser, path: string, newPat
 
 /** Delete a folder: uncategorize every concept in its subtree (content kept)
  * and remove the entity form of the folder subtree. */
-export async function deleteCategoryFolder(user: ScopeUser, path: string): Promise<CategoryOpResult> {
+export async function deleteCategoryFolder(
+  user: ScopeUser,
+  path: string,
+): Promise<CategoryOpResult> {
   const from = normalizeCategory(path);
   if (!from) return { ok: false, code: "invalid", message: "路径不能为空" };
 
@@ -343,11 +358,11 @@ export async function deleteCategoryFolder(user: ScopeUser, path: string): Promi
     const scopeParams = user.role === "admin" ? [] : [user.id];
     const updated = await client.query(
       `UPDATE concepts SET category = NULL WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClauseUpdate}`,
-      user.role === "admin" ? [from, escapeLike(from)] : [from, escapeLike(from), user.id]
+      user.role === "admin" ? [from, escapeLike(from)] : [from, escapeLike(from), user.id],
     );
     await client.query(
       `DELETE FROM folders WHERE (path = $1 OR path LIKE $2 || '/%')${ownerClauseRead}`,
-      [from, escapeLike(from), ...scopeParams]
+      [from, escapeLike(from), ...scopeParams],
     );
     await client.query("COMMIT");
     invalidateSearchCache();
@@ -382,11 +397,11 @@ export async function createFolder(user: ScopeUser, path: string): Promise<Categ
     const scopeParams = user.role === "admin" ? [] : [user.id];
     const dupFolder = await client.query(
       `SELECT 1 FROM folders WHERE (path = $1 OR path LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
-      [to, escapeLike(to), ...scopeParams]
+      [to, escapeLike(to), ...scopeParams],
     );
     const dupConcept = await client.query(
       `SELECT 1 FROM concepts WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
-      [to, escapeLike(to), ...scopeParams]
+      [to, escapeLike(to), ...scopeParams],
     );
     if ((dupFolder.rowCount ?? 0) > 0 || (dupConcept.rowCount ?? 0) > 0) {
       await client.query("ROLLBACK");
@@ -418,19 +433,19 @@ export async function getConceptDetail(id: string, user: ScopeUser): Promise<Con
           `SELECT c.*, ou.username AS owner_username,
             (SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count
           FROM concepts c LEFT JOIN users ou ON ou.id = c.owner_id WHERE c.id = $1`,
-          [id]
+          [id],
         )
       : await query<Concept>(
           `SELECT c.*, ou.username AS owner_username,
             (SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count
           FROM concepts c LEFT JOIN users ou ON ou.id = c.owner_id WHERE c.id = $1 AND c.owner_id = $2`,
-          [id, user.id]
+          [id, user.id],
         );
   if (rows.length === 0) return null;
   const concept = rows[0];
   const versions = await query<ConceptVersion>(
     "SELECT * FROM concept_versions WHERE concept_id = $1 ORDER BY version_number DESC",
-    [id]
+    [id],
   );
   return { ...concept, versions: versions.rows };
 }
@@ -444,7 +459,6 @@ export interface SearchResult extends Concept {
    * across lexical and semantic-only rows. */
   similarity?: number;
 }
-
 
 // Repeat searches (UI resubmits, MCP agent loops, back-navigation re-renders)
 // hit the same needle within seconds. A small TTL cache turns those into ~0ms.
@@ -465,7 +479,7 @@ export async function searchConcepts(
   limit = 20,
   offset = 0,
   // Caller surface recorded in search_logs: ui | api | ingest.
-  source = "api"
+  source = "api",
 ): Promise<{ results: SearchResult[]; total: number }> {
   const startedAt = Date.now();
   // Which path answered: bm25 | trgm-fallback | semantic-only ("none" only
@@ -493,12 +507,17 @@ export async function searchConcepts(
   // lexical-only: logged here, the stage below sees undefined.
   const embedPromise =
     offset === 0 && needle.length > 0 && (await hasSemanticSearch())
-      ? llmEmbed([needle.slice(0, 4000)], { purpose: "search-embed", userId: user.id, apiKeyId: user.apiKeyId })
-          .then((v) => v[0])
-          .catch((err: unknown) => {
-            console.error("[semantic] recall failed, lexical only:", err instanceof Error ? err.message : err);
-            return undefined;
-          })
+      ? cachedQueryVector(needle, {
+          purpose: "search-embed",
+          userId: user.id,
+          apiKeyId: user.apiKeyId,
+        }).catch((err: unknown) => {
+          console.error(
+            "[semantic] recall failed, lexical only:",
+            err instanceof Error ? err.message : err,
+          );
+          return undefined;
+        })
       : null;
 
   const isAdmin = user.role === "admin";
@@ -513,7 +532,7 @@ export async function searchConcepts(
   // prepared-statement name, so each shape plans once per connection).
   const params: unknown[] = [user.id, terms, needle, limit, offset];
   const ownerClause = isAdmin
-    ? `($${((params.push(user.role), params.length))}::text = 'admin' OR c.owner_id = $1)`
+    ? `($${(params.push(user.role), params.length)}::text = 'admin' OR c.owner_id = $1)`
     : "c.owner_id = $1";
   const filterClauses = operatorFilterClauses(parsed, params);
   const filterSql = filterClauses.length ? " AND " + filterClauses.join(" AND ") : "";
@@ -600,7 +619,7 @@ export async function searchConcepts(
     // shape never references, and pg cannot type unused parameters.
     const fparams: unknown[] = [user.id, limit, offset];
     const fOwner = isAdmin
-      ? `($${((fparams.push(user.role), fparams.length))}::text = 'admin' OR c.owner_id = $1)`
+      ? `($${(fparams.push(user.role), fparams.length)}::text = 'admin' OR c.owner_id = $1)`
       : "c.owner_id = $1";
     const fClauses = operatorFilterClauses(parsed, fparams);
     const fWhere = fClauses.length ? " AND " + fClauses.join(" AND ") : "";
@@ -646,7 +665,11 @@ export async function searchConcepts(
     try {
       await client.query("BEGIN");
       const stmtName = `search_bm25_v1_${isAdmin ? "admin" : "user"}_${filterShape || "plain"}`;
-      const { rows } = await client.query<SearchResult & { total_count: string }>({ name: stmtName, text: sql, values: params as never[] });
+      const { rows } = await client.query<SearchResult & { total_count: string }>({
+        name: stmtName,
+        text: sql,
+        values: params as never[],
+      });
       await client.query("COMMIT");
       // count(*) over() rides on the rows; an offset past the end has no rows
       // and therefore reports total 0 — the UI simply shows an empty page.
@@ -673,10 +696,7 @@ export async function searchConcepts(
       total = lexicalResults.length;
       mode = "trgm-fallback";
     } catch (err) {
-      console.error(
-        "[search] trgm fallback failed:",
-        err instanceof Error ? err.message : err
-      );
+      console.error("[search] trgm fallback failed:", err instanceof Error ? err.message : err);
     }
   }
 
@@ -693,7 +713,14 @@ export async function searchConcepts(
   if (queryVector) {
     try {
       if (lexicalResults.length > 0) {
-        results = await rerankWithSemantic(user, needle, lexicalResults, limit, queryVector, parsed);
+        results = await rerankWithSemantic(
+          user,
+          needle,
+          lexicalResults,
+          limit,
+          queryVector,
+          parsed,
+        );
       } else {
         const semCands = await semanticCandidates(user, queryVector, limit, parsed);
         const ids = semCands.map((c) => c.id);
@@ -716,7 +743,7 @@ export async function searchConcepts(
     } catch (err) {
       console.error(
         "[semantic] recall failed, lexical only:",
-        err instanceof Error ? err.message : err
+        err instanceof Error ? err.message : err,
       );
     }
   }
@@ -764,13 +791,14 @@ export async function searchConcepts(
 async function searchTrgmFuzzy(
   user: ScopeUser,
   needle: string,
-  limit: number
+  limit: number,
 ): Promise<SearchResult[]> {
   // $1 = ownerId, $2 = needle, $3 = limit; role appended last for admin.
   const params: unknown[] = [user.id, needle, limit];
-  const ownerClause = user.role === "admin"
-    ? `($${((params.push(user.role), params.length))}::text = 'admin' OR c.owner_id = $1)`
-    : "c.owner_id = $1";
+  const ownerClause =
+    user.role === "admin"
+      ? `($${(params.push(user.role), params.length)}::text = 'admin' OR c.owner_id = $1)`
+      : "c.owner_id = $1";
   const sql = `
     SELECT c.id, c.type, c.title, c.description, c.status, c.tags,
            c.current_version, c.created_at, c.updated_at,
@@ -801,7 +829,11 @@ async function searchTrgmFuzzy(
     await client.query("BEGIN");
     await client.query("SET LOCAL pg_trgm.similarity_threshold = 0.1");
     await client.query("SET LOCAL pg_trgm.word_similarity_threshold = 0.4");
-    const { rows } = await client.query<SearchResult>({ name: "search_trgm_v1", text: sql, values: params as never[] });
+    const { rows } = await client.query<SearchResult>({
+      name: "search_trgm_v1",
+      text: sql,
+      values: params as never[],
+    });
     await client.query("COMMIT");
     return rows;
   } catch (err) {
@@ -812,7 +844,10 @@ async function searchTrgmFuzzy(
   }
 }
 
-export async function createConcept(input: ConceptInput, user: { id: string; username: string; role: "user" | "admin" }): Promise<string> {
+export async function createConcept(
+  input: ConceptInput,
+  user: { id: string; username: string; role: "user" | "admin" },
+): Promise<string> {
   const body = input.body;
   const contentHash = sha256Hex(body);
   const type = input.type.trim() || "Note";
@@ -833,28 +868,48 @@ export async function createConcept(input: ConceptInput, user: { id: string; use
       `SELECT c.id, c.title FROM concepts c
        JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
        WHERE v.content_hash = $1 AND c.deleted_at IS NULL ${user.role === "admin" ? "" : "AND c.owner_id = $2"} LIMIT 1`,
-      user.role === "admin" ? [contentHash] : [contentHash, user.id]
+      user.role === "admin" ? [contentHash] : [contentHash, user.id],
     );
     if (dupBody.rows.length > 0) {
       throw new DuplicateBodyError(dupBody.rows[0].id as string, dupBody.rows[0].title as string);
     }
     const inserted = await client.query(
       "INSERT INTO concepts (owner_id, type, title, description, category, tags, status) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-      [user.id, type, title, description, category, tags, status]
+      [user.id, type, title, description, category, tags, status],
     );
     const conceptId = inserted.rows[0].id as string;
     // Raw-input traceability: link the source back to the new concept.
     await client.query(
       "INSERT INTO sources (concept_id, source_type, original_name, content, content_hash) VALUES ($1, $2, $3, $4, $5)",
-      [conceptId, "text", title || null, body, contentHash]
+      [conceptId, "text", title || null, body, contentHash],
     );
     // Version 1 carries a metadata snapshot so past versions stay reconstructable.
     await client.query(
       "INSERT INTO concept_versions (concept_id, version_number, title, description, category, tags, status, type, body_markdown, content_hash, generated_by) VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-      [conceptId, title, description, category, tags, status, type, body, contentHash, input.generatedBy ?? `human:${user.username}`]
+      [
+        conceptId,
+        title,
+        description,
+        category,
+        tags,
+        status,
+        type,
+        body,
+        contentHash,
+        input.generatedBy ?? `human:${user.username}`,
+      ],
     );
     await client.query("COMMIT");
     invalidateSearchCache();
+    queueConceptEmbedding({
+      conceptId,
+      ownerId: user.id,
+      contentHash,
+      title,
+      description,
+      body,
+      userId: user.id,
+    });
     return conceptId;
   } catch (err) {
     await client.query("ROLLBACK");
@@ -872,7 +927,9 @@ export interface SaveResult {
 export async function addConceptVersion(
   id: string,
   input: ConceptInput,
-  username: string
+  username: string,
+  /** Attribution for the write-path embedding sync (llm_calls row). */
+  meta?: { userId?: string | null; apiKeyId?: string | null },
 ): Promise<SaveResult> {
   const body = input.body;
   const contentHash = sha256Hex(body);
@@ -889,23 +946,40 @@ export async function addConceptVersion(
   try {
     await client.query("BEGIN");
     const cur = await client.query(
-      "SELECT c.current_version, v.content_hash FROM concepts c JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version WHERE c.id = $1 FOR UPDATE",
-      [id]
+      "SELECT c.current_version, c.owner_id, v.content_hash FROM concepts c JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version WHERE c.id = $1 FOR UPDATE",
+      [id],
     );
     if (cur.rows.length === 0) throw new NotFoundError("Concept not found");
     const currentVersion = cur.rows[0].current_version as number;
     const currentHash = cur.rows[0].content_hash as string;
+    const ownerId = cur.rows[0].owner_id as string;
 
     if (contentHash === currentHash) {
       // 正文未变化：只更新元信息，不新增版本、不新增来源；同步刷新当前版本行的
       // 快照列，保证"最新版本行即最新元数据"不变量（也修正导出的 generated.at）。
       await client.query(
         "UPDATE concepts SET title = $2, description = $3, category = $4, tags = $5, type = $6, status = $7, updated_at = now() WHERE id = $1",
-        [id, metadata.title, metadata.description, metadata.category, metadata.tags, metadata.type, metadata.status]
+        [
+          id,
+          metadata.title,
+          metadata.description,
+          metadata.category,
+          metadata.tags,
+          metadata.type,
+          metadata.status,
+        ],
       );
       await client.query(
         "UPDATE concept_versions SET title = $2, description = $3, category = $4, tags = $5, status = $6, type = $7 WHERE concept_id = $1 AND version_number = (SELECT current_version FROM concepts WHERE id = $1)",
-        [id, metadata.title, metadata.description, metadata.category, metadata.tags, metadata.status, metadata.type]
+        [
+          id,
+          metadata.title,
+          metadata.description,
+          metadata.category,
+          metadata.tags,
+          metadata.status,
+          metadata.type,
+        ],
       );
       await client.query("COMMIT");
       invalidateSearchCache();
@@ -916,24 +990,55 @@ export async function addConceptVersion(
     // 同概念、同正文哈希已有 source 记录时跳过，避免重复来源行。
     const dup = await client.query(
       "SELECT 1 FROM sources WHERE content_hash = $1 AND concept_id = $2 LIMIT 1",
-      [contentHash, id]
+      [contentHash, id],
     );
     if (!dup.rowCount) {
       await client.query(
         "INSERT INTO sources (concept_id, source_type, original_name, content, content_hash) VALUES ($1, $2, $3, $4, $5)",
-        [id, "text", metadata.title || null, body, contentHash]
+        [id, "text", metadata.title || null, body, contentHash],
       );
     }
     await client.query(
       "INSERT INTO concept_versions (concept_id, version_number, title, description, category, tags, status, type, body_markdown, content_hash, generated_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
-      [id, nextVersion, metadata.title, metadata.description, metadata.category, metadata.tags, metadata.status, metadata.type, body, contentHash, input.generatedBy ?? `human:${username}`]
+      [
+        id,
+        nextVersion,
+        metadata.title,
+        metadata.description,
+        metadata.category,
+        metadata.tags,
+        metadata.status,
+        metadata.type,
+        body,
+        contentHash,
+        input.generatedBy ?? `human:${username}`,
+      ],
     );
     await client.query(
       "UPDATE concepts SET current_version = $2, title = $3, description = $4, category = $5, tags = $6, type = $7, status = $8, updated_at = now() WHERE id = $1",
-      [id, nextVersion, metadata.title, metadata.description, metadata.category, metadata.tags, metadata.type, metadata.status]
+      [
+        id,
+        nextVersion,
+        metadata.title,
+        metadata.description,
+        metadata.category,
+        metadata.tags,
+        metadata.type,
+        metadata.status,
+      ],
     );
     await client.query("COMMIT");
     invalidateSearchCache();
+    queueConceptEmbedding({
+      conceptId: id,
+      ownerId,
+      contentHash,
+      title: metadata.title,
+      description: metadata.description,
+      body,
+      userId: meta?.userId ?? null,
+      apiKeyId: meta?.apiKeyId ?? null,
+    });
     return { version: nextVersion, created: true };
   } catch (err) {
     await client.query("ROLLBACK");
@@ -947,7 +1052,7 @@ export async function restoreConceptVersion(
   id: string,
   versionNumber: number,
   user: ScopeUser,
-  username: string
+  username: string,
 ): Promise<SaveResult> {
   // Version rows are immutable, so "rollback" creates a NEW version from the
   // historical snapshot — nothing is rewritten, and the rollback itself is
@@ -968,7 +1073,8 @@ export async function restoreConceptVersion(
       status: v.status ?? undefined,
       body: v.body_markdown,
     },
-    username
+    username,
+    { userId: user.id, apiKeyId: user.apiKeyId },
   );
 }
 
@@ -1005,11 +1111,11 @@ export async function trashConcept(id: string, user: ScopeUser): Promise<boolean
     user.role === "admin"
       ? await query<{ id: string }>(
           "UPDATE concepts SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL RETURNING id",
-          [id]
+          [id],
         )
       : await query<{ id: string }>(
           "UPDATE concepts SET deleted_at = now() WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL RETURNING id",
-          [id, user.id]
+          [id, user.id],
         );
   if (rows.length > 0) invalidateSearchCache();
   return rows.length > 0;
@@ -1021,11 +1127,11 @@ export async function restoreConcept(id: string, user: ScopeUser): Promise<boole
     user.role === "admin"
       ? await query<{ id: string }>(
           "UPDATE concepts SET deleted_at = NULL WHERE id = $1 AND deleted_at IS NOT NULL RETURNING id",
-          [id]
+          [id],
         )
       : await query<{ id: string }>(
           "UPDATE concepts SET deleted_at = NULL WHERE id = $1 AND owner_id = $2 AND deleted_at IS NOT NULL RETURNING id",
-          [id, user.id]
+          [id, user.id],
         );
   if (rows.length > 0) invalidateSearchCache();
   return rows.length > 0;
@@ -1045,28 +1151,36 @@ export async function purgeConcept(id: string, user: ScopeUser): Promise<PurgeRe
     // Admin accounts may purge any user's trashed concept.
     const owned =
       user.role === "admin"
-        ? await client.query("SELECT 1 FROM concepts WHERE id = $1 AND deleted_at IS NOT NULL", [id])
-        : await client.query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2 AND deleted_at IS NOT NULL", [
+        ? await client.query("SELECT 1 FROM concepts WHERE id = $1 AND deleted_at IS NOT NULL", [
             id,
-            user.id,
-          ]);
+          ])
+        : await client.query(
+            "SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2 AND deleted_at IS NOT NULL",
+            [id, user.id],
+          );
     if (owned.rowCount === 0) {
       await client.query("ROLLBACK");
       // Distinguish "never existed / other owner" from "still live" for the API.
       const any =
         user.role === "admin"
           ? await client.query("SELECT 1 FROM concepts WHERE id = $1", [id])
-          : await client.query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [id, user.id]);
+          : await client.query("SELECT 1 FROM concepts WHERE id = $1 AND owner_id = $2", [
+              id,
+              user.id,
+            ]);
       return { ok: false, reason: any.rowCount === 0 ? "not-found" : "not-trashed" };
     }
     const atts = await client.query<{ storage_key: string }>(
       "SELECT storage_key FROM attachments WHERE concept_id = $1",
-      [id]
+      [id],
     );
     const res =
       user.role === "admin"
         ? await client.query("DELETE FROM concepts WHERE id = $1 RETURNING id", [id])
-        : await client.query("DELETE FROM concepts WHERE id = $1 AND owner_id = $2 RETURNING id", [id, user.id]);
+        : await client.query("DELETE FROM concepts WHERE id = $1 AND owner_id = $2 RETURNING id", [
+            id,
+            user.id,
+          ]);
     await client.query("COMMIT");
     const deleted = (res.rowCount ?? 0) > 0;
     // Remove disk bytes after the DB commit; any failure is logged, and the
@@ -1109,10 +1223,7 @@ export interface Source {
 /** Newest source records, owner-scoped (admin sees all). Same optional time
  * filter as the /logs tables; ownership lives on concepts (owner_id) while
  * the timestamp lives on sources — hence the two separate expressions. */
-export async function listSources(
-  user: ScopeUser,
-  filter?: LogFilter
-): Promise<Source[]> {
+export async function listSources(user: ScopeUser, filter?: LogFilter): Promise<Source[]> {
   const params: unknown[] = [];
   const where = logWhereClause("c.owner_id", "s.created_at", user, filter, params);
   const { rows } = await query<Source>(
@@ -1121,7 +1232,7 @@ export async function listSources(
      JOIN concepts c ON c.id = s.concept_id
      ${where}
      ORDER BY s.created_at DESC LIMIT 200`,
-    params
+    params,
   );
   return rows;
 }
@@ -1146,7 +1257,8 @@ export async function listConceptsForExport(user: ScopeUser): Promise<ExportConc
   // 回收站必须排除：导出=有效知识快照、图谱=可见条目、导入查重=现存的可见条目，
   // 三者共用的这份读取面此前漏了 deleted_at 过滤（2026-09-10 实测：导出包里
   // 混着一条已删除条目，导入还会把撞上它的内容误判成「重复」而静默跳过）。
-  const { rows } = await query<ExportConcept>(`
+  const { rows } = await query<ExportConcept>(
+    `
     SELECT
       c.id, c.type, c.title, c.description, c.category, c.status, c.tags,
       c.current_version, c.updated_at,
@@ -1157,7 +1269,9 @@ export async function listConceptsForExport(user: ScopeUser): Promise<ExportConc
     WHERE c.deleted_at IS NULL
     ${user.role === "admin" ? "" : "AND c.owner_id = $1"}
     ORDER BY c.updated_at DESC
-  `, user.role === "admin" ? [] : [user.id]);
+  `,
+    user.role === "admin" ? [] : [user.id],
+  );
   return rows;
 }
 
@@ -1171,7 +1285,7 @@ export async function listConceptsForExport(user: ScopeUser): Promise<ExportConc
  * case-insensitive; unknown titles simply stay unresolved (dimmed in UI). */
 export async function resolveLinkTargets(
   user: ScopeUser,
-  titles: string[]
+  titles: string[],
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   const uniq = [...new Set(titles.map((t) => t.trim()).filter(Boolean))].slice(0, 100);
@@ -1180,7 +1294,7 @@ export async function resolveLinkTargets(
   const { rows } = await query<{ id: string; title: string }>(
     `SELECT c.id, c.title FROM concepts c
      WHERE c.deleted_at IS NULL AND lower(c.title) = ANY($1::text[]) ${user.role === "admin" ? "" : "AND c.owner_id = $2"}`,
-    user.role === "admin" ? [lowered] : [lowered, user.id]
+    user.role === "admin" ? [lowered] : [lowered, user.id],
   );
   for (const r of rows) {
     const key = r.title.toLowerCase();
@@ -1199,7 +1313,7 @@ export async function findUnlinkedMentions(
   user: ScopeUser,
   targetId: string,
   targetTitle: string,
-  limit = 20
+  limit = 20,
 ): Promise<{ id: string; title: string; snippet: string }[]> {
   if (targetTitle.trim().length < 2) return [];
   const { rows } = await query<{ id: string; title: string; body_markdown: string }>(
@@ -1211,7 +1325,7 @@ export async function findUnlinkedMentions(
        AND position(lower($2) IN lower(v.body_markdown)) > 0
        ${user.role === "admin" ? "" : "AND c.owner_id = $3"}
      LIMIT ${Math.max(1, Math.min(50, limit))}`,
-    user.role === "admin" ? [targetId, targetTitle] : [targetId, targetTitle, user.id]
+    user.role === "admin" ? [targetId, targetTitle] : [targetId, targetTitle, user.id],
   );
   const lowerTitle = targetTitle.toLowerCase();
   const out: { id: string; title: string; snippet: string }[] = [];
@@ -1246,7 +1360,7 @@ export async function findBacklinks(
   user: ScopeUser,
   targetId: string,
   targetTitle: string,
-  limit = 50
+  limit = 50,
 ): Promise<{ id: string; title: string; updated_at: string }[]> {
   const exact = `%${escapeLike(`[[${targetTitle}]]`)}%`;
   const aliased = `%${escapeLike(`[[${targetTitle}|`)}%`;
@@ -1258,7 +1372,7 @@ export async function findBacklinks(
        ${user.role === "admin" ? "" : "AND c.owner_id = $4"}
      ORDER BY c.updated_at DESC
      LIMIT ${Math.max(1, Math.min(200, limit))}`,
-    user.role === "admin" ? [targetId, exact, aliased] : [targetId, exact, aliased, user.id]
+    user.role === "admin" ? [targetId, exact, aliased] : [targetId, exact, aliased, user.id],
   );
   return rows;
 }
@@ -1268,7 +1382,7 @@ export async function findBacklinks(
  * per-embed queries. */
 export async function getBodiesByTitles(
   user: ScopeUser,
-  titles: string[]
+  titles: string[],
 ): Promise<Map<string, { id: string; body: string }>> {
   const uniq = [...new Set(titles.map((t) => t.trim()).filter(Boolean))].slice(0, 50);
   const map = new Map<string, { id: string; body: string }>();
@@ -1279,7 +1393,7 @@ export async function getBodiesByTitles(
      FROM concepts c
      JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
      WHERE c.deleted_at IS NULL AND lower(c.title) = ANY($1::text[]) ${user.role === "admin" ? "" : "AND c.owner_id = $2"}`,
-    user.role === "admin" ? [lowered] : [lowered, user.id]
+    user.role === "admin" ? [lowered] : [lowered, user.id],
   );
   for (const r of rows) map.set(r.title.toLowerCase(), { id: r.id, body: r.body_markdown });
   return map;

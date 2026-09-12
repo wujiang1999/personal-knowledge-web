@@ -51,9 +51,11 @@ async function main() {
      WHERE c.updated_at > now() - ($1::int * interval '1 day')
      ORDER BY c.updated_at DESC
      LIMIT 200`,
-    [days]
+    [days],
   );
-  console.error(`[review] 近 ${days} 天变更 ${rows.length} 条；模式=${write ? "写入" : "dry-run(加 --write 才落库)"}；LLM=${cfg ? cfg.model : "未配置"}`);
+  console.error(
+    `[review] 近 ${days} 天变更 ${rows.length} 条；模式=${write ? "写入" : "dry-run(加 --write 才落库)"}；LLM=${cfg ? cfg.model : "未配置"}`,
+  );
 
   // Deterministic detail: grouped by category, 新增/更新 tagged.
   const byCategory = new Map<string, Row[]>();
@@ -69,7 +71,8 @@ async function main() {
   const llmLines: string[] = [];
   for (const r of rows) {
     if (llmLines.length >= LIST_ROW_LIMIT || budget <= 0) break;
-    const kind = new Date(r.created_at).getTime() >= Date.now() - days * 86_400_000 ? "新增" : "更新";
+    const kind =
+      new Date(r.created_at).getTime() >= Date.now() - days * 86_400_000 ? "新增" : "更新";
     const desc = (r.description || r.body_markdown.slice(0, 150)).replace(/\s+/g, " ").trim();
     const line = `- [${kind}][${r.category ?? "未分类"}] ${r.title} — ${desc}`.slice(0, 220);
     budget -= line.length;
@@ -91,20 +94,28 @@ async function main() {
             content: `近 ${days} 天知识库变更：\n${llmLines.join("\n")}`,
           },
         ],
-        { meta: { purpose: "weekly-review" }, maxTokens: 1200, temperature: 0.3 }
+        { meta: { purpose: "weekly-review" }, maxTokens: 1200, temperature: 0.3 },
       );
     } catch (err) {
-      console.error("[review] LLM 叙事失败（继续用确定性部分）:", err instanceof Error ? err.message : err);
+      console.error(
+        "[review] LLM 叙事失败（继续用确定性部分）:",
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 
   const today = new Date().toISOString().slice(0, 10);
   const lines: string[] = [];
-  lines.push(`> 生成于 ${today} · 覆盖近 ${days} 天 · ${rows.length} 条变更 · LLM 叙事：${narrative ? "已生成" : "未生成"}`);
+  lines.push(
+    `> 生成于 ${today} · 覆盖近 ${days} 天 · ${rows.length} 条变更 · LLM 叙事：${narrative ? "已生成" : "未生成"}`,
+  );
   lines.push("");
   lines.push(`## 概览`);
   lines.push("");
-  lines.push(narrative?.overview?.trim() || (rows.length ? `近 ${days} 天共 ${rows.length} 条条目变更。` : "近窗口无变更。"));
+  lines.push(
+    narrative?.overview?.trim() ||
+      (rows.length ? `近 ${days} 天共 ${rows.length} 条条目变更。` : "近窗口无变更。"),
+  );
   lines.push("");
   if (narrative?.highlights?.length) {
     lines.push(`## 重点`);
@@ -118,9 +129,12 @@ async function main() {
     lines.push(`### ${cat}（${list.length}）`);
     lines.push("");
     for (const r of list) {
-      const kind = new Date(r.created_at).getTime() >= Date.now() - days * 86_400_000 ? "新增" : "更新";
+      const kind =
+        new Date(r.created_at).getTime() >= Date.now() - days * 86_400_000 ? "新增" : "更新";
       const desc = (r.description || "").replace(/\s+/g, " ").trim().slice(0, 120);
-      lines.push(`- [${kind}] [[${r.title}]]${r.status !== "stable" ? `（${r.status}）` : ""}${desc ? ` — ${desc}` : ""}`);
+      lines.push(
+        `- [${kind}] [[${r.title}]]${r.status !== "stable" ? `（${r.status}）` : ""}${desc ? ` — ${desc}` : ""}`,
+      );
     }
     lines.push("");
   }
@@ -140,9 +154,10 @@ async function main() {
 
   const userRow = await query<{ id: string; username: string }>(
     "SELECT id, username FROM users WHERE username = $1 LIMIT 1",
-    [getAdminUsername()]
+    [getAdminUsername()],
   );
-  if (userRow.rows.length === 0) throw new Error(`找不到用户 ${getAdminUsername()}(ADMIN_USERNAME)`);
+  if (userRow.rows.length === 0)
+    throw new Error(`找不到用户 ${getAdminUsername()}(ADMIN_USERNAME)`);
   const owner = { id: userRow.rows[0].id, username: userRow.rows[0].username };
   const title = `每周回顾 ${today}`;
   const input = {
@@ -156,10 +171,12 @@ async function main() {
   };
   const existing = await query<{ id: string }>(
     "SELECT id FROM concepts WHERE title = $1 AND owner_id = $2 LIMIT 1",
-    [title, owner.id]
+    [title, owner.id],
   );
   if (existing.rows.length > 0) {
-    const { version } = await addConceptVersion(existing.rows[0].id, input, owner.username);
+    const { version } = await addConceptVersion(existing.rows[0].id, input, owner.username, {
+      userId: owner.id,
+    });
     console.log(`[review] 已更新 ${title} → v${version}`);
   } else {
     const id = await createConcept(input, { ...owner, role: "admin" as const });
