@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
-import { importOkfZip, OKF_IMPORT_MAX_BYTES } from "@/lib/okf-import";
+import { importOkfZip, readBoundedBody, OKF_IMPORT_MAX_BYTES } from "@/lib/okf-import";
 import { requireApiUser } from "@/lib/requireUser";
 import { withRoute } from "@/lib/withRoute";
+
+/** The 20MB ZIP cap, as one 413 response. Shared by the declared-length
+ * pre-check and the streaming reader's mid-body abort so both rejections say
+ * the same thing. */
+function tooLarge(): NextResponse {
+  return NextResponse.json({ error: "ZIP 过大（上限 20MB）" }, { status: 413 });
+}
 
 /** OKF Bundle 导入（导出的逆操作，迁移/恢复闭环的另一半）：接收导出 ZIP 的
  * 原始字节，逐文件解析并按 重复/冲突/新建 分类入库，返回逐项报告。
@@ -12,13 +19,17 @@ export const POST = withRoute("POST /api/import/okf", async (req: Request) => {
 
   const declared = Number(req.headers.get("content-length") ?? 0);
   if (declared > OKF_IMPORT_MAX_BYTES) {
-    return NextResponse.json({ error: "ZIP 过大（上限 20MB）" }, { status: 413 });
+    return tooLarge();
   }
-  const bytes = Buffer.from(await req.arrayBuffer());
+  // Content-Length is absent for chunked transfer-encoding, so the declared
+  // check above cannot be trusted to bound anything: `await req.arrayBuffer()`
+  // would buffer the entire stream before the post-read length check ever
+  // ran. Read incrementally and abort at the cap instead, so an oversized
+  // chunked body costs at most OKF_IMPORT_MAX_BYTES rather than exhausting the
+  // process heap.
+  const bytes = await readBoundedBody(req, OKF_IMPORT_MAX_BYTES);
+  if (bytes === null) return tooLarge();
   if (bytes.length === 0) return NextResponse.json({ error: "缺少请求体" }, { status: 400 });
-  if (bytes.length > OKF_IMPORT_MAX_BYTES) {
-    return NextResponse.json({ error: "ZIP 过大（上限 20MB）" }, { status: 413 });
-  }
 
   try {
     const report = await importOkfZip(user, bytes);

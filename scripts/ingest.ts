@@ -66,7 +66,10 @@ async function main() {
   const raw: unknown[] = [];
   // Extraction calls are independent per chunk; a small worker pool keeps a
   // long document from serializing N × (network TTFB + generation). A failed
-  // chunk logs and is skipped, same as the sequential version did.
+  // chunk logs and is skipped — but the count is kept, because silently losing
+  // a chunk means silently losing part of the document.
+  // (The workers share one JS thread, so `chunkFailures++` cannot race.)
+  let chunkFailures = 0;
   const INGEST_CONCURRENCY = Math.max(1, Number(process.env.INGEST_CONCURRENCY ?? 4));
   let next = 0;
   const worker = async (): Promise<void> => {
@@ -84,6 +87,7 @@ async function main() {
         if (Array.isArray(out)) raw.push(...out);
         process.stderr.write(`[ingest] 提取 ${i + 1}/${chunks.length} 完成\n`);
       } catch (err) {
+        chunkFailures++;
         console.error(`[ingest] 第 ${i + 1}/${chunks.length} 块提取失败:`, err instanceof Error ? err.message : err);
       }
     }
@@ -96,8 +100,13 @@ async function main() {
   const wouldCreate: string[] = [];
   const dupes: { title: string; match: string; score: number; reviewId: string | null }[] = [];
   const failed: { title: string; reason: string }[] = [];
+  /** Candidates skipped because the dedup lookup itself failed. Tracked
+   * separately from `failed`: nothing was attempted, and the reason is that
+   * the library could not be consulted — not that a write was rejected. */
+  const unchecked: { title: string; reason: string }[] = [];
   for (const c of candidates) {
     let deduped = false;
+    let dedupError = false;
     try {
       const { results } = await searchConcepts({ id: owner.id, role: owner.role }, c.title, 5, 0, "ingest");
       const best = results[0];
@@ -123,9 +132,16 @@ async function main() {
         deduped = true;
       }
     } catch (err) {
-      console.error(`[ingest] 查重失败(继续创建): ${c.title}`, err instanceof Error ? err.message : err);
+      // Fail CLOSED. Creating the concept anyway would silently defeat the
+      // whole point of this script: an unreachable database or a failed vector
+      // search means "unknown whether this duplicates something", not "unique".
+      // In --write mode that writes an unreviewed twin into the library and
+      // bypasses the review queue, which is exactly the hole the queue exists
+      // to close.
+      dedupError = true;
+      unchecked.push({ title: c.title, reason: err instanceof Error ? err.message : String(err) });
     }
-    if (deduped) continue;
+    if (deduped || dedupError) continue;
 
     if (!write) {
       wouldCreate.push(c.title);
@@ -147,9 +163,22 @@ async function main() {
     const queued = d.reviewId ? ` → 待裁决 ${d.reviewId.slice(0, 8)}` : "";
     console.log(`  ~ ${d.title} ≈「${d.match}」(score ${d.score})${queued}`);
   }
+  if (unchecked.length) {
+    console.log(`查重失败、未写入 ${unchecked.length} 条:`);
+    for (const u of unchecked) console.log(`  ? ${u.title}: ${u.reason}`);
+  }
   if (failed.length) {
     console.log(`失败 ${failed.length} 条:`);
     for (const f of failed) console.log(`  ✗ ${f.title}: ${f.reason}`);
+  }
+  if (chunkFailures || unchecked.length || failed.length) {
+    // Non-zero so a caller (or the systemd timer) can tell a partial run from
+    // a clean one. Exit 0 with items printed to stdout was invisible to every
+    // orchestrator: the OnFailure alert never fired.
+    console.error(
+      `[ingest] 未完成：块提取失败 ${chunkFailures}、查重失败 ${unchecked.length}、写入失败 ${failed.length}`
+    );
+    process.exitCode = 1;
   }
   await closePool();
 }

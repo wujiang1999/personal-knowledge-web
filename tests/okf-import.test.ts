@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { classifyImport, isConceptFile, parseOkfMarkdown, stripExportHeading, type ImportExisting } from "../lib/okf-import";
+import {
+  classifyImport,
+  isConceptFile,
+  parseOkfMarkdown,
+  readBoundedBody,
+  stripExportHeading,
+  type ImportExisting,
+} from "../lib/okf-import";
 
 const existing = (id: string, title: string, hash: string): ImportExisting => ({ id, title, contentHash: hash });
 
@@ -95,5 +102,71 @@ describe("classifyImport", () => {
 
   it("unknown title and hash creates", () => {
     expect(classifyImport(doc("新"), "h9", [existing("id1", "旧", "h1")]).action).toBe("create");
+  });
+});
+
+describe("readBoundedBody", () => {
+  /** A Request whose body streams `chunks` and records how many were pulled.
+   * `duplex: "half"` is required by undici/Node whenever a body is a stream. */
+  function streamRequest(chunks: Uint8Array[]) {
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled < chunks.length) {
+          controller.enqueue(chunks[pulled++]);
+        } else {
+          controller.close();
+        }
+      },
+    });
+    const req = new Request("http://local/api/import/okf", {
+      method: "POST",
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
+    return { req, pulled: () => pulled };
+  }
+
+  it("returns the concatenated body when under the cap", async () => {
+    const { req } = streamRequest([Buffer.from("zip-head"), Buffer.from("-tail")]);
+    const bytes = await readBoundedBody(req, 1024);
+    expect(bytes).not.toBeNull();
+    expect(bytes?.toString()).toBe("zip-head-tail");
+  });
+
+  it("rejects an oversized body and stops reading it", async () => {
+    // Regression: the route called `await req.arrayBuffer()`, which buffers the
+    // entire stream before any length check can run. Content-Length is absent
+    // under chunked transfer-encoding, so the declared-size pre-check bounded
+    // nothing and a large chunked upload could exhaust the heap.
+    const big = Buffer.alloc(4096, 0x61);
+    const { req, pulled } = streamRequest([big, big, big, big]);
+
+    const bytes = await readBoundedBody(req, 4096);
+
+    expect(bytes).toBeNull();
+    // The abort must be early: the remaining chunks are never pulled, so peak
+    // memory stays near the cap instead of the body's full size.
+    expect(pulled()).toBeLessThan(4);
+  });
+
+  it("accepts a body exactly at the cap", async () => {
+    const exact = Buffer.alloc(100, 0x62);
+    const { req } = streamRequest([exact]);
+    const bytes = await readBoundedBody(req, 100);
+    expect(bytes?.length).toBe(100);
+  });
+
+  it("returns an empty buffer for an empty body", async () => {
+    const { req } = streamRequest([]);
+    const bytes = await readBoundedBody(req, 100);
+    expect(bytes).not.toBeNull();
+    expect(bytes?.length).toBe(0);
+  });
+
+  it("falls back safely when the request has no body", async () => {
+    const req = new Request("http://local/api/import/okf", { method: "POST", body: Buffer.from("abc") });
+    const bytes = await readBoundedBody(req, 10);
+    expect(bytes?.toString()).toBe("abc");
   });
 });

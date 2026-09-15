@@ -1,6 +1,6 @@
 import { loadEnv } from "./load-env";
 import { closePool, query } from "../lib/db";
-import { parseWikiLinks } from "../lib/links";
+import { MIN_MENTION_TITLE_CHARS, findUnlinkedMentionOffset, parseWikiLinks } from "../lib/links";
 
 loadEnv();
 
@@ -95,33 +95,18 @@ async function main() {
   }
 
   // 5. Unlinked mentions (Obsidian pattern): a body mentions another entry's
-  // title as plain text without [[linking]] it. Deterministic in-memory scan
-  // (corpus is small); titles under 2 chars are noise, ASCII titles require
-  // non-alphanumeric neighbors so "AI" doesn't match "AISLE". Any
-  // [[title… prefix in the body (plain or alias) marks the pair as linked.
+  // title as plain text without [[linking]] it. The linked/unlinked decision
+  // and the ASCII word-boundary rule live in lib/links.ts so this report and
+  // the concept detail page's 未链接提及 panel cannot drift apart (the local
+  // copy here used to skip a note wholesale when the title appeared anywhere
+  // inside `[[`, hiding every other stray mention in it).
   const unlinked: { from: Row; target: Row }[] = [];
-  const isAscii = (s: string) => /^[\x20-\x7e]+$/.test(s);
   for (const src of rows) {
-    const lower = src.body_markdown.toLowerCase();
     for (const target of rows) {
       if (target.id === src.id) continue;
-      const t = target.title;
-      if (t.length < 2) continue;
-      const lt = t.toLowerCase();
-      if (lower.includes(`[[${lt}`)) continue;
-      let idx = lower.indexOf(lt);
-      while (idx !== -1) {
-        if (isAscii(t)) {
-          const before = idx > 0 ? lower[idx - 1] : " ";
-          const after = idx + lt.length < lower.length ? lower[idx + lt.length] : " ";
-          if (/[a-z0-9]/.test(before) || /[a-z0-9]/.test(after)) {
-            idx = lower.indexOf(lt, idx + 1);
-            continue;
-          }
-        }
-        unlinked.push({ from: src, target });
-        break;
-      }
+      if (target.title.trim().length < MIN_MENTION_TITLE_CHARS) continue;
+      if (findUnlinkedMentionOffset(src.body_markdown, target.title) === -1) continue;
+      unlinked.push({ from: src, target });
     }
   }
   console.log(`\n5. 未链接提及（正文提到标题但未加 [[链接]]）：${unlinked.length} 处`);

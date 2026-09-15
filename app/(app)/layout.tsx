@@ -15,6 +15,9 @@ const baseLinks = [
   { href: "/logs", label: "记录" },
   { href: "/trash", label: "回收站" },
   { href: "/reviews", label: "审核" },
+  // 版本排在「设置」之前：账户入口是靠 slice(0, -1) 插到最后一项前面的，
+  // 把新项追加到末尾会让账户入口插错位置。
+  { href: "/version", label: "版本" },
   { href: "/settings", label: "设置" },
 ];
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseClaimVerdict, parseClaims } from "../lib/claims";
+import { buildContradictionMessages, parseClaimVerdict, parseClaims } from "../lib/claims";
 import type { SearchResult } from "../lib/concepts";
 
 const hit = (id: string, title: string): SearchResult =>
@@ -78,5 +78,52 @@ describe("parseClaimVerdict", () => {
     expect(parseClaimVerdict({ verdict: "consistent" }, candidates).verdict).toBe("consistent");
     expect(parseClaimVerdict({ verdict: "maybe" }, candidates).verdict).toBe("unrelated");
     expect(parseClaimVerdict(null, candidates).verdict).toBe("unrelated");
+  });
+});
+
+describe("buildContradictionMessages", () => {
+  // Regression: searchConcepts returns only a ~500-char match-anchored preview
+  // of body_markdown. Judging a factual contradiction from that window read
+  // "the preview doesn't mention the opposite" as a contradiction and kept
+  // flooding /reviews with false positives. The caller now reloads full bodies
+  // (lib/concepts.ts:getBodiesByIds) and passes them in.
+  const claim = { text: "RRF 的 k 取 60", quote: "" };
+  const candidates = [hit("11111111-2222-3333-4444-555555555555", "甲条目")];
+
+  const userText = (messages: { role: string; content: string }[]) =>
+    messages.find((m) => m.role === "user")?.content ?? "";
+
+  it("sends the supplied full body, not the search preview", () => {
+    const fullBody = `前言\n${"填充".repeat(400)}\n结论：k 实际取 20，与 60 相反`;
+    const preview = hit("11111111-2222-3333-4444-555555555555", "甲条目");
+    preview.body_markdown = "…填充填充 结论：k 实际取 20";
+
+    const messages = buildContradictionMessages(claim, "源条目", candidates, new Map([
+      ["11111111-2222-3333-4444-555555555555", fullBody],
+    ]));
+    const text = userText(messages);
+
+    // The tail that a 500-char preview would have cut off must reach the model.
+    expect(text).toContain("k 实际取 20，与 60 相反");
+    expect(text).toContain("前言");
+    expect(text).not.toContain(preview.body_markdown);
+    expect(text).toContain("主张（出自《源条目》）：RRF 的 k 取 60");
+  });
+
+  it("renders a missing body as empty rather than falling back to the preview", () => {
+    const text = userText(buildContradictionMessages(claim, "源条目", candidates, new Map()));
+    expect(text).toContain("《甲条目》");
+    expect(text).not.toContain("…");
+  });
+
+  it("marks truncation explicitly so an unseen tail is not read as evidence", () => {
+    const huge = "x".repeat(8_001) + "尾部结论";
+    const text = userText(
+      buildContradictionMessages(claim, "源条目", candidates, new Map([
+        ["11111111-2222-3333-4444-555555555555", huge],
+      ]))
+    );
+    expect(text).toContain("已截断");
+    expect(text).not.toContain("尾部结论");
   });
 });

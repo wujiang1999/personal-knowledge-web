@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily backup for personal-knowledge-web (03:30 local)
+
+[Timer]
+# Runs before the weekly claims (Sun 05:00), curate (Sat 05:00) and monthly
+# restore drill (15th 04:10) so those always see a fresh snapshot.
+OnCalendar=*-*-* 03:30
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

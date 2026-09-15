@@ -1,6 +1,6 @@
 # sjtuai.art · 个人知识库（personal-knowledge-web）部署手册
 
-与 `wujiangai.art`（纯静态门户）不同，本站是**动态应用**：Next.js 15 + PostgreSQL，
+与 `wujiangai.art`（纯静态门户）不同，本站是**动态应用**：Next.js 16 + PostgreSQL，
 由 Caddy 反向代理到本机 Node 服务。本地目录按域名存放完整项目源码（独立 git 仓库）。
 
 ## 架构总览
@@ -9,7 +9,7 @@
 |---|---|
 | 域名 | `sjtuai.art`（www 301 → 裸域），DNS → 43.155.203.242（腾讯云，与门户同一台） |
 | 入口 | Caddy `reverse_proxy 127.0.0.1:3000`（配置：`/etc/caddy/Caddyfile`，快照见本目录 `Caddyfile`） |
-| 应用 | Next.js 15 生产模式，systemd 服务 `personal-knowledge-web.service` |
+| 应用 | Next.js 16 生产模式，systemd 服务 `personal-knowledge-web.service` |
 | 代码（服务器） | `/opt/personal-knowledge-web`（git 检出，运行账号 `knowledge-web` 属主） |
 | 运行账号 | `knowledge-web`（专用低权限账号，`HOME=/var/lib/knowledge-web`） |
 | 数据库 | 本机 PostgreSQL 16（systemd 依赖 `postgresql.service`） |
@@ -23,7 +23,9 @@
 | 项目全部源码（`app/`、`lib/`、`db/` 等） | `/opt/personal-knowledge-web` | 经审核的 git bundle 更新服务器检出 |
 | `deploy.sh`（项目根自带） | 同名文件 | **服务器端**部署脚本，以 root 运行 |
 | `Caddyfile` | `/etc/caddy/Caddyfile` | 线上 Caddy 配置的**权威快照**，改动后须双向同步 |
-| `server/` | 各自路径 | 服务器侧配置纳管：`backup.sh`(→/usr/local/sbin/personal-knowledge-web-backup)、`restore-drill.*`(→/usr/local/sbin + /etc/systemd/system)、`kb-notify.sh`+`kb-alert@.service`(告警通知器)、`fail2ban-jail.local`(→/etc/fail2ban/jail.local)、`systemd-drops/*.conf`(OnFailure 告警 drop-in) |
+| `server/` | 各自路径 | 服务器侧配置纳管：`backup.sh`(→/usr/local/sbin/personal-knowledge-web-backup)、`restore-drill.sh`(→/usr/local/sbin/personal-knowledge-web-restore-drill)、`kb-notify.sh`(→/usr/local/sbin/kb-notify)、`fail2ban-jail.local`(→/etc/fail2ban/jail.local)、`*.service`/`*.timer`(→/etc/systemd/system，见下)、`systemd-drops/*.conf`(OnFailure 告警 drop-in) |
+| ↳ `server/personal-knowledge-web.service` | `/etc/systemd/system/` | 主应用单元（监听 127.0.0.1:3000） |
+| ↳ `server/personal-knowledge-web-{backup,smoke,restore-drill,claims,curate}.{service,timer}` | `/etc/systemd/system/` | 定时/触发单元。名称必须与 `systemd-drops/<unit>.service.alert.conf` 一致，否则 `OnFailure` 告警不会挂上 |
 | `offsite/pull-kb-offsite.ps1` | —（Windows 侧） | 异地拉取脚本，计划任务 "KB offsite backup pull" 每日 12:30 运行，备份落 `E:\Backups\personal-knowledge-web` |
 | `DEPLOYMENT.md` | 不上传 | 本文档 |
 

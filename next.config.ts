@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { buildCsp } from "./lib/csp";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -10,26 +11,26 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     const isProd = process.env.NODE_ENV === "production";
-    // NOTE: X-Frame-Options and CSP frame-ancestors are set in proxy.ts
-    // instead — they must be per-path so the /api/attachments/:id response can
-    // be framed by our own PDF preview <iframe> (frame-ancestors 'self'),
-    // while pages still get clickjacking protection (DENY / 'none').
+    // NOTE: X-Frame-Options and the per-path CSP frame-ancestors value are set
+    // in proxy.ts — the attachment endpoint must stay frameable by our own PDF
+    // preview <iframe> (frame-ancestors 'self') while everything else is
+    // denied. The middleware's headers.set() REPLACES this header rather than
+    // merging with it, so both sides must emit the COMPLETE policy from the
+    // shared builder in lib/csp.ts; a fragment here or there silently strips
+    // every other directive from the live response.
+    //
+    // The baseline below covers routes the middleware matcher excludes (static
+    // assets), which never get the proxy's header.
     const securityHeaders = [
       { key: "X-Content-Type-Options", value: "nosniff" },
       { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
       { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
     ];
-    // Pragmatic CSP for a single-user app. 'unsafe-inline' for script-src is
-    // required by (a) the static theme init script in app/layout.tsx and
-    // (b) Next.js App Router's inline hydration bootstrap. Markdown is rendered
-    // as plain text (<pre>), never HTML, so the XSS surface this exposes is
-    // minimal. style-src 'unsafe-inline' is required for SSR-inlined CSS.
     // Applied only in production to avoid dev-mode HMR/eval breakage.
     if (isProd) {
       securityHeaders.push({
         key: "Content-Security-Policy",
-        value:
-          "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self'; frame-src 'self'; object-src 'none'; connect-src 'self'; base-uri 'self'; form-action 'self'",
+        value: buildCsp("none"),
       });
     }
     return [

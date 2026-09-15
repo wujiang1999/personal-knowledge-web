@@ -1,6 +1,6 @@
 import { ASK_MIN_SCORE, ASK_MIN_SIMILARITY } from "./ask";
 import { getLlmChatConfig } from "./config";
-import { searchConcepts, type SearchResult } from "./concepts";
+import { getBodiesByIds, searchConcepts, type SearchResult } from "./concepts";
 import { query } from "./db";
 import { llmChatJsonWith } from "./llm";
 import { enqueueReview } from "./reviews";
@@ -94,13 +94,34 @@ export function buildClaimMessages(title: string, body: string): { role: "system
   ];
 }
 
+/** 单条候选正文送进模型的上限。与 lib/judge.ts 的 requestCharCap 同源思路：
+ * 判定请求体积必须可预测。judge 那边是**绝不截断**（截断的候选会让"建议合并"
+ * 变成丢数据），这里的取舍不同——claims 的候选只是"既有条目"的参照，截断最坏
+ * 结果是漏报或误报一条矛盾，不会毁掉任何内容；所以这里允许带上明确的截断标记
+ * 截断，而不是让请求无限增长。标记必须出现在正文里，否则模型会把"后半段没提到"
+ * 读成"后半段说了别的"，反而制造假矛盾。 */
+const CANDIDATE_MAX_CHARS = 8_000;
+
+/**
+ * 判定提示。`bodies` 必须是**全文**（lib/concepts.ts:getBodiesByIds），不能用
+ * searchConcepts 返回的 ~500 字锚定预览：让模型从一个任意窗口判断事实矛盾，
+ * 会把"预览里没看到相反结论"读成矛盾，持续往审核队列灌假阳性。
+ */
 export function buildContradictionMessages(
   claim: ExtractedClaim,
   sourceTitle: string,
-  candidates: SearchResult[]
+  candidates: SearchResult[],
+  bodies: Map<string, string>
 ): { role: "system" | "user"; content: string }[] {
   const material = candidates
-    .map((c, i) => `[${i + 1}] id=${c.id} 《${c.title}》\n${c.body_markdown}`)
+    .map((c, i) => {
+      const full = bodies.get(c.id) ?? "";
+      const text =
+        full.length > CANDIDATE_MAX_CHARS
+          ? `${full.slice(0, CANDIDATE_MAX_CHARS)}\n…（正文过长，已截断；未显示部分不构成矛盾证据）`
+          : full;
+      return `[${i + 1}] id=${c.id} 《${c.title}》\n${text}`;
+    })
     .join("\n\n");
   return [
     {
@@ -108,6 +129,7 @@ export function buildContradictionMessages(
       content:
         "你是知识库的矛盾审计助手。判断「主张」与「既有条目」是否事实冲突：" +
         "矛盾 = 两者不能同时为真（数值、结论、因果相反）；仅仅详略不同、角度不同不算矛盾。" +
+        "既有条目未提及该主张不等于矛盾；找不到明确的相反陈述就判 unrelated。" +
         '只输出 JSON：{"verdict":"consistent|contradicts|unrelated","targetId":"冲突条目的 id","reason":"≤120 字理由"}' +
         "；verdict 为 contradicts 时必须给出 targetId。",
     },
@@ -226,13 +248,29 @@ export async function auditConceptClaims(
       outcome.skippedWeak++;
       continue;
     }
+    // searchConcepts only returns a ~500-char preview, so reload the full
+    // current bodies before judging. Candidates whose body is absent here were
+    // deleted or moved out of scope between the search and this read — drop
+    // them rather than judging from a stale preview.
+    const bodies = await getBodiesByIds(user, candidates.map((c) => c.id));
+    const grounded = candidates.filter((c) => bodies.has(c.id));
+    if (grounded.length === 0) {
+      outcome.skippedWeak++;
+      continue;
+    }
     outcome.checked++;
     const verdict = parseClaimVerdict(
-      await llmChatJsonWith<unknown>(cfg, buildContradictionMessages(claim, target.title, candidates), {
-        meta: { purpose: "claims", userId: user.id, apiKeyId: user.apiKeyId },
-        maxTokens: 600,
-      }),
-      candidates
+      await llmChatJsonWith<unknown>(
+        cfg,
+        buildContradictionMessages(claim, target.title, grounded, bodies),
+        {
+          meta: { purpose: "claims", userId: user.id, apiKeyId: user.apiKeyId },
+          maxTokens: 600,
+        }
+      ),
+      // Same list that built the prompt: the model can only name a target it
+      // was shown, and parseClaimVerdict resolves ids/prefixes against this.
+      grounded
     );
     opts.onProgress?.(`    「${claim.text.slice(0, 40)}…」→ ${verdict.verdict}`);
     if (!verdict.target) continue;

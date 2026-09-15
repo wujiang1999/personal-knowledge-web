@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildCategoryTree, escapeLike, normalizeCategory, sha256Hex, type Concept } from "../lib/concepts";
+import { buildCategoryTree, normalizeCategory, sha256Hex, type Concept } from "../lib/concepts";
+import { escapeLike } from "../lib/search-syntax";
 
 describe("escapeLike", () => {
   it("escapes % _ and backslash", () => {

@@ -21,10 +21,29 @@ export const INLINE_SAFE_IMAGES = new Set([
 
 export type AttachmentPreviewKind = "image" | "pdf" | "text" | "audio" | "video" | "other";
 
+/** A bare `type/subtype` with no parameters, whitespace, or control chars. */
+const MIME_TOKEN = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/;
+
+/**
+ * Reduce a possibly parameterized MIME (`text/html; charset=utf-8`) to its
+ * lowercase base type. Every safety decision in this module — and in
+ * lib/attachments.ts — MUST compare against this form: blocklist membership
+ * is exact, so a trailing `; charset=…` used to slip `text/html` past it and
+ * let a stored HTML document render inline as same-origin script.
+ *
+ * Returns "" for anything that is not a well-formed `type/subtype` token, so
+ * callers can fail closed to a download.
+ */
+export function baseMime(mime: string): string {
+  const base = (mime || "").split(";")[0].trim().toLowerCase();
+  return MIME_TOKEN.test(base) ? base : "";
+}
+
 /** How a stored mime type should be presented in the browser. Script-capable
  * or unrecognized types are "other" = download-only. */
 export function previewKindFor(mime: string): AttachmentPreviewKind {
-  const m = (mime || "").toLowerCase();
+  const m = baseMime(mime);
+  if (!m) return "other";
   if (m === "application/pdf") return "pdf";
   if (m.startsWith("image/")) return INLINE_SAFE_IMAGES.has(m) ? "image" : "other";
   if (m.startsWith("text/") && m !== "text/html") return "text";

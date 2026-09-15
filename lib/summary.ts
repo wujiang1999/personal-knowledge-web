@@ -175,7 +175,12 @@ export async function executeResummarizeTask(
     }
     result.finished = true;
     result.tookMs = Date.now() - startedAt;
-    await finishTask(taskId, result);
+    // Each progressTask above renews the lease clock, so a 50-item batch that
+    // runs past TASK_LEASE_SECONDS stays alive. If it still got reaped (process
+    // stalled mid-item), the result is discarded — say so instead of pretending.
+    if (!(await finishTask(taskId, result))) {
+      console.error("[summary] 批量补描述结果被丢弃：任务已不在执行中（租约超时）:", taskId);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[summary] 批量补描述失败:", taskId, message);

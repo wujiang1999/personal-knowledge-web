@@ -1,0 +1,14 @@
+[Unit]
+Description=personal-knowledge-web daily backup (db + attachments + checksums)
+# The alert drop-in (systemd-drops/personal-knowledge-web-backup.service.alert.conf)
+# attaches OnFailure=kb-alert@%n.service, matching the claims/curate units.
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+# Runs as root on purpose: it writes /var/backups/personal-knowledge-web and
+# must `runuser -u postgres` for pg_dump. Not User=knowledge-web.
+ExecStart=/usr/local/sbin/personal-knowledge-web-backup
+# A stuck dump must not wedge the timer queue.
+TimeoutStartSec=30min

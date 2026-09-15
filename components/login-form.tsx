@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { safeSameOriginPath } from "@/lib/publicUrl";
 
 const inputCls =
   "w-full rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500 focus:ring-1 focus:ring-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500";
@@ -27,8 +28,9 @@ export function LoginForm({ next }: { next?: string }) {
         setError(data.error ?? "登录失败");
         return;
       }
-      // 只允许站内相对路径，防止开放重定向
-      const dest = next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+      // Only a same-origin path is honoured — see safeSameOriginPath for the
+      // `/\evil.com` open-redirect the old startsWith blacklist missed.
+      const dest = safeSameOriginPath(next, "/dashboard");
       router.push(dest);
       router.refresh();
     } catch {

@@ -11,6 +11,57 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Shell scripts are LF and parse
+        # deploy.sh runs on the server as root; a CRLF sneaking in from a
+        # Windows checkout makes bash fail at the first `{` ("syntax error near
+        # unexpected token"), and deploy.sh's own dirty-tree guard then refuses
+        # to deploy on top of it. `.gitattributes` normalizes on checkout —
+        # these two checks catch a file that bypassed it.
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(printf '%s\n' deploy.sh server/*.sh scripts/*.sh)
+          fail=0
+          for f in "${scripts[@]}"; do
+            [ -f "$f" ] || continue
+            if grep -qU $'\r$' "$f"; then
+              echo "::error file=$f::contains CRLF line endings (must be LF)"
+              fail=1
+            fi
+            bash -n "$f" || { echo "::error file=$f::bash syntax check failed"; fail=1; }
+          done
+          [ "$fail" -eq 0 ] || exit 1
+
+      - name: systemd drop-ins match unit names
+        # A drop-in only attaches when its filename prefix equals the unit it
+        # targets. personal-knowledge-web-restore-drill.service.alert.conf
+        # silently did nothing while the repo shipped `restore-drill.service`,
+        # so the monthly drill could fail without ever firing kb-alert@.
+        #
+        # caddy.service is shipped by the caddy package, not this repo, so its
+        # drop-in is expected to have no matching file here.
+        run: |
+          set -euo pipefail
+          EXTERNAL_UNITS=" caddy.service "
+          fail=0
+          for conf in server/systemd-drops/*.service.alert.conf; do
+            [ -f "$conf" ] || continue
+            unit="$(basename "$conf" .alert.conf)"
+            case "$EXTERNAL_UNITS" in *" $unit "*) continue ;; esac
+            [ -f "server/$unit" ] || { echo "::error file=$conf::no server/$unit to attach to"; fail=1; }
+          done
+          [ "$fail" -eq 0 ] || exit 1
+
+      - name: Timer units have matching services
+        run: |
+          set -euo pipefail
+          fail=0
+          for timer in server/*.timer; do
+            [ -f "$timer" ] || continue
+            svc="server/$(basename "$timer" .timer).service"
+            [ -f "$svc" ] || { echo "::error file=$timer::no $svc for this timer"; fail=1; }
+          done
+          [ "$fail" -eq 0 ] || exit 1
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22

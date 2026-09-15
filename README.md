@@ -10,7 +10,7 @@
 
 | 模块 | 方案 |
 | --- | --- |
-| Web 框架 | Next.js 15 (App Router) + TypeScript |
+| Web 框架 | Next.js 16 (App Router) + TypeScript |
 | UI | Tailwind CSS |
 | 身份认证 | 自定义用户名 + 密码（bcrypt 哈希，JWT httpOnly Cookie 会话） |
 | 数据库 | 自建 PostgreSQL 16（部署在腾讯云服务器，与应用同机） |

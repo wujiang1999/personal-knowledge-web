@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BM25_B, BM25_K1, DEPRECATED_FACTOR, MAX_QUERY_TERMS, bm25TermContribution, tokenizeQuery } from "../lib/bm25";
+import { DEPRECATED_FACTOR, MAX_QUERY_TERMS, bm25TermContribution, tokenizeQuery } from "../lib/bm25";
 
 describe("tokenizeQuery", () => {
   it("splits mixed CJK+ASCII needles into words and bigrams", () => {
@@ -21,6 +21,34 @@ describe("tokenizeQuery", () => {
 
   it("ignores punctuation inside a needle but keeps surrounding terms", () => {
     expect(tokenizeQuery("pgvector!数据库")).toEqual(["pgvector", "数据", "据库"]);
+  });
+
+  it("treats CJK punctuation as a term boundary, never a bigram source", () => {
+    // Regression: the non-ASCII run regex does not split on punctuation, so
+    // `知识库，检索` used to arrive as one run. Stripping the punctuation glued
+    // it into 知识库检索 and emitted the cross-boundary bigram 库检 — which then
+    // matched any doc where 库 sits next to 检 (数据库检索优化) and inflated its
+    // BM25 score.
+    expect(tokenizeQuery("知识库，检索")).toEqual(["知识", "识库", "检索"]);
+    expect(tokenizeQuery("向量、检索")).toEqual(["向量", "检索"]);
+    expect(tokenizeQuery("部署；回滚")).toEqual(["部署", "回滚"]);
+    expect(tokenizeQuery("知识库，检索")).not.toContain("库检");
+  });
+
+  it("keeps real terms inside the cap on a long punctuated query", () => {
+    // Phantom boundary terms used to consume the whole MAX_QUERY_TERMS budget:
+    // 14 real phrases expanded to 27 bigrams, truncated at 24, silently
+    // dropping 缓存/索引 from the search.
+    const long =
+      "部署，回滚，备份，监控，告警，扩容，缩容，灰度，压测，限流，熔断，降级，缓存，索引";
+    const terms = tokenizeQuery(long);
+    expect(terms.length).toBe(14);
+    expect(terms).toContain("缓存");
+    expect(terms).toContain("索引");
+    // No term may straddle a punctuation mark.
+    for (const junk of ["署回", "滚备", "份监", "级缓"]) {
+      expect(terms).not.toContain(junk);
+    }
   });
 
   it("caps the term list at MAX_QUERY_TERMS", () => {
@@ -59,12 +87,19 @@ describe("bm25TermContribution", () => {
     expect(rare).toBeGreaterThan(common);
   });
 
-  it("matches the SQL constants", () => {
-    // Hand-computed: idf=ln(2), tf=1, docLen=avgdl → 1*ln(2)*2.2/(1+1.2).
-    expect(bm25TermContribution(1, n / 2, n, avgdl, avgdl)).toBeCloseTo(
-      (Math.log(2) * (BM25_K1 + 1)) / (1 + BM25_K1 * (1 - BM25_B + BM25_B)),
-      10
-    );
+  it("matches the BM25 values the SQL computes", () => {
+    // Pinned as literal numbers, not as a restatement of the formula with the
+    // same exported constants — the previous version recomputed the
+    // implementation inside the assertion, so it could only catch a change
+    // that the test's own copy of the formula also happened to miss.
+    // Reference points (idf = ln(1 + (n − df + 0.5)/(df + 0.5)), k1 = 1.2,
+    // b = 0.75, n = 100, avgdl = 1000). Signature is
+    // bm25TermContribution(tf, df, n, docLen, avgdl).
+    //   tf=1 df=50 docLen=avgdl → at docLen == avgdl the length-normalization
+    //   term collapses to 1, so the value is idf = ln 2 exactly.
+    expect(bm25TermContribution(1, n / 2, n, avgdl, avgdl)).toBeCloseTo(0.6931471805599453, 12);
+    expect(bm25TermContribution(3, 10, n, 500, avgdl)).toBeCloseTo(3.984191657033, 12);
+    expect(bm25TermContribution(1, 90, n, 4000, avgdl)).toBeCloseTo(0.049284788877, 12);
   });
 
   it("deprecated factor scales the score without zeroing it", () => {

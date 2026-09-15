@@ -152,26 +152,41 @@ export async function claimTask(id: string): Promise<boolean> {
   return (rowCount ?? 0) > 0;
 }
 
-/** 执行途中刷新 result（进度），状态保持 running——客户端据此显示 x/y。 */
+/** 执行途中刷新 result（进度），状态保持 running——客户端据此显示 x/y。
+ *
+ * 同时把 `started_at` 推进到当前时间：这一列就是租约时钟（reapStaleTasks 用
+ * `coalesce(started_at, created_at)` 判执行者是否已消失），所以每条进度都续期
+ * 一次租约。批量补描述要跑 50 条 LLM 调用，远超 5 分钟租约；没有心跳的话它
+ * 会被中途判失败，随后完成的结果又被下面的终态守卫丢弃。 */
 export async function progressTask(id: string, result: unknown): Promise<void> {
-  await query("UPDATE tasks SET result = $2::jsonb WHERE id = $1 AND status = 'running'", [
-    id,
-    JSON.stringify(result),
-  ]);
-}
-
-export async function finishTask(id: string, result: unknown): Promise<void> {
   await query(
-    "UPDATE tasks SET status = 'done', result = $2::jsonb, error = NULL, finished_at = now() WHERE id = $1",
+    "UPDATE tasks SET result = $2::jsonb, started_at = now() WHERE id = $1 AND status = 'running'",
     [id, JSON.stringify(result)]
   );
 }
 
-export async function failTask(id: string, error: string): Promise<void> {
-  await query(
-    "UPDATE tasks SET status = 'failed', error = $2, finished_at = now() WHERE id = $1",
+/** 终态写入只在任务仍处于执行中时生效。
+ *
+ * 少了这个守卫时，一个被租约判死（已标 failed）的任务会被迟到的执行者无条件
+ * 刷回 done：错误文案丢失，而且 `findLiveTask` 在它「飞行中」期间看不到该任务，
+ * 同类任务会被重复放行——正是入队去重要挡的形态。返回 false 表示结果被丢弃
+ * （任务已进入终态），调用方据此记一行日志。 */
+export async function finishTask(id: string, result: unknown): Promise<boolean> {
+  const { rowCount } = await query(
+    "UPDATE tasks SET status = 'done', result = $2::jsonb, error = NULL, finished_at = now() WHERE id = $1 AND status = 'running'",
+    [id, JSON.stringify(result)]
+  );
+  return (rowCount ?? 0) > 0;
+}
+
+/** 失败终态。允许 queued（执行者领用前就炸了）与 running，但绝不覆盖已终态的
+ * 行：被租约判死的任务保持它自己的失败原因，不被执行者的迟到异常改写。 */
+export async function failTask(id: string, error: string): Promise<boolean> {
+  const { rowCount } = await query(
+    "UPDATE tasks SET status = 'failed', error = $2, finished_at = now() WHERE id = $1 AND status IN ('queued', 'running')",
     [id, error.slice(0, 500)]
   );
+  return (rowCount ?? 0) > 0;
 }
 
 /** 同一 owner 正在飞行中的同类任务（用于挡重复提交：双击、客户端重试）。

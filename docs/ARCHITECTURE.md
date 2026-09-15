@@ -169,6 +169,7 @@ BM25 + embedding 混合，五级降级链，任何一级失败都退化而不是
 | `/api/capture` | POST | 快速捕获（首行成标题、默认目录 `捕获/`、status=draft；故意无 GET 防 key 进访问日志） |
 | `/api/graph` | GET | 链接图（节点=可见条目，边=已解析 [[链接]]/嵌入，内存解析） |
 | `/api/export/okf` `/api/import/okf` | GET / POST | OKF v0.2 ZIP 导出 / 导入（同名不同内容 → conflicts 报告 + 审核队列，不覆盖） |
+| `/api/judge` | POST | 服务端写路径判别（MCP 客户端调用）：只收候选 id，正文由服务端按 owner/软删过滤后重新读取；返回 `ok|merge|conflict` 与 `targetId` |
 | `/api/logs/llm` | POST | 远端客户端（MCP judge）用量上报契约，服务端归因 apiKeyId |
 | `/api/stats` | GET | 流量/检索质量/key 用量/高频条目/库健康（`?days=`，admin 全库口径） |
 | `/api/users` `/api/users/[id]` | GET, POST / PATCH | admin 账户控制台 |

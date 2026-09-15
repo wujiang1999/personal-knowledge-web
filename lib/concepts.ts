@@ -12,7 +12,12 @@ import {
 } from "./semantic";
 import { BM25_B, BM25_K1, DEPRECATED_FACTOR, tokenizeQuery } from "./bm25";
 import { logRetrievalHits, logSearch, logWhereClause, type LogFilter } from "./logs";
-import { operatorFilterClauses, parseSearchQuery } from "./search-syntax";
+import { escapeLike, operatorFilterClauses, parseSearchQuery } from "./search-syntax";
+import {
+  MIN_MENTION_TITLE_CHARS,
+  escapeRegExp,
+  findUnlinkedMentionOffset,
+} from "./links";
 
 /** Thrown when a concept lookup by id finds no row (typed 404, not string-match). */
 export class NotFoundError extends Error {}
@@ -97,11 +102,6 @@ export function normalizeCategory(input?: string | null): string | null {
     .map((s) => s.trim())
     .filter(Boolean);
   return segs.length ? segs.join("/") : null;
-}
-
-/** Escape LIKE metacharacters so user input can never act as a wildcard. */
-export function escapeLike(needle: string): string {
-  return needle.replace(/[\\%_]/g, (m) => "\\" + m);
 }
 
 export async function listConcepts(opts: {
@@ -244,6 +244,14 @@ export function buildCategoryTree(
 // rename/move rewrite the path prefix of every concept in the subtree and
 // delete uncategorizes it. Version snapshots keep the classification history;
 // updated_at is intentionally left untouched so bulk ops don't flood 最近更新.
+//
+// 回收站条目一律不参与（每个 concepts 查询都带 `deleted_at IS NULL`），这是
+// 「全查询面过滤 deleted_at」不变量（见 docs/ARCHITECTURE 设计不变量 3）在
+// 文件夹面上的落实。可见目录树 = listConcepts(未删除) ∪ folders 实体，所以
+// 漏掉这层过滤有两个实测形态：① 回收站里某条目还挂在 `projects/old`，把任何
+// 文件夹改名到该路径就报「目标文件夹已存在」409，而 UI 里那个目录明明是空的；
+// ② 删除文件夹会把子树下**已软删**条目的 category 一起改写/置 NULL，等它从
+// 回收站恢复时原位置已经没了。`folders` 表没有软删列，它的查询不需要这个过滤。
 
 /** True when `path` equals or lives under `ancestor` (slash-boundary aware). */
 export function isSameOrDescendantPath(path: string, ancestor: string): boolean {
@@ -285,7 +293,7 @@ export async function renameCategoryFolder(
     // Target path must be free — silent folder merging would be surprising.
     // Both entity forms can occupy it: empty-folder rows and concept categories.
     const conflict = await client.query(
-      `SELECT 1 FROM concepts WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
+      `SELECT 1 FROM concepts WHERE deleted_at IS NULL AND (category = $1 OR category LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
       [to, escapeLike(to), ...scopeParams],
     );
     if ((conflict.rowCount ?? 0) > 0) {
@@ -302,7 +310,7 @@ export async function renameCategoryFolder(
     }
     // A folder exists when concepts, folder rows, or both occupy the subtree.
     const source = await client.query(
-      `SELECT 1 FROM concepts WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
+      `SELECT 1 FROM concepts WHERE deleted_at IS NULL AND (category = $1 OR category LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
       [from, escapeLike(from), ...scopeParams],
     );
     let exists = (source.rowCount ?? 0) > 0;
@@ -320,7 +328,7 @@ export async function renameCategoryFolder(
     const updated = await client.query(
       `UPDATE concepts
        SET category = CASE WHEN category = $1 THEN $2 ELSE $2 || substring(category FROM length($1) + 1) END
-       WHERE (category = $1 OR category LIKE $3 || '/%')${ownerClauseUpdate}`,
+       WHERE deleted_at IS NULL AND (category = $1 OR category LIKE $3 || '/%')${ownerClauseUpdate}`,
       user.role === "admin" ? [from, to, escapeLike(from)] : [from, to, escapeLike(from), user.id],
     );
     // Rewrite the entity form of the folder (and its empty subfolders) too.
@@ -356,8 +364,10 @@ export async function deleteCategoryFolder(
     const ownerClauseUpdate = user.role === "admin" ? "" : " AND owner_id = $3";
     const ownerClauseRead = user.role === "admin" ? "" : " AND owner_id = $3";
     const scopeParams = user.role === "admin" ? [] : [user.id];
+    // Trashed concepts keep their category so restoring one lands it back in
+    // the folder it came from (see the section header invariant).
     const updated = await client.query(
-      `UPDATE concepts SET category = NULL WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClauseUpdate}`,
+      `UPDATE concepts SET category = NULL WHERE deleted_at IS NULL AND (category = $1 OR category LIKE $2 || '/%')${ownerClauseUpdate}`,
       user.role === "admin" ? [from, escapeLike(from)] : [from, escapeLike(from), user.id],
     );
     await client.query(
@@ -400,7 +410,7 @@ export async function createFolder(user: ScopeUser, path: string): Promise<Categ
       [to, escapeLike(to), ...scopeParams],
     );
     const dupConcept = await client.query(
-      `SELECT 1 FROM concepts WHERE (category = $1 OR category LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
+      `SELECT 1 FROM concepts WHERE deleted_at IS NULL AND (category = $1 OR category LIKE $2 || '/%')${ownerClauseRead} LIMIT 1`,
       [to, escapeLike(to), ...scopeParams],
     );
     if ((dupFolder.rowCount ?? 0) > 0 || (dupConcept.rowCount ?? 0) > 0) {
@@ -945,14 +955,19 @@ export async function addConceptVersion(
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    // The locking read also returns the prior title/description so the
+    // same-hash branch can tell "metadata actually changed" from a no-op save
+    // — see the embedding sync below.
     const cur = await client.query(
-      "SELECT c.current_version, c.owner_id, v.content_hash FROM concepts c JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version WHERE c.id = $1 FOR UPDATE",
+      "SELECT c.current_version, c.owner_id, c.title, c.description, v.content_hash FROM concepts c JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version WHERE c.id = $1 FOR UPDATE",
       [id],
     );
     if (cur.rows.length === 0) throw new NotFoundError("Concept not found");
     const currentVersion = cur.rows[0].current_version as number;
     const currentHash = cur.rows[0].content_hash as string;
     const ownerId = cur.rows[0].owner_id as string;
+    const prevTitle = cur.rows[0].title as string;
+    const prevDescription = cur.rows[0].description as string | null;
 
     if (contentHash === currentHash) {
       // 正文未变化：只更新元信息，不新增版本、不新增来源；同步刷新当前版本行的
@@ -983,6 +998,27 @@ export async function addConceptVersion(
       );
       await client.query("COMMIT");
       invalidateSearchCache();
+      // 语义召回的谓词要求 chunk 行的 source_title/source_description 与 concepts
+      // 完全一致（lib/semantic.ts），而被向量化的文本本身是
+      // `title\ndescription\n正文`（lib/chunks.ts:chunkEmbeddingText）。所以只改
+      // 标题或描述时，必须重新向量化：原地改那两列会让旧向量与新文本悄悄不一致，
+      // 而且 chunkProfileMatches 仍判定为"完整"，backfill 永远不会修复它。
+      // 结果就是改个标题错字 → 该条目从语义检索与 /ask 取证里静默消失，
+      // 而 BM25 仍能命中，表现为难以归因的"搜得到、问答答不出"。
+      const metadataChanged =
+        prevTitle !== metadata.title || prevDescription !== metadata.description;
+      if (metadataChanged) {
+        queueConceptEmbedding({
+          conceptId: id,
+          ownerId,
+          contentHash,
+          title: metadata.title,
+          description: metadata.description,
+          body,
+          userId: meta?.userId ?? null,
+          apiKeyId: meta?.apiKeyId ?? null,
+        });
+      }
       return { version: currentVersion, created: false };
     }
 
@@ -1306,16 +1342,17 @@ export async function resolveLinkTargets(
 /** Concepts whose current body MENTIONS `targetTitle` as plain text without
  * linking it — the Obsidian "unlinked mentions" pattern (deterministic; the
  * snippet is shown for human confirmation, an LLM pass is overkill while the
- * context is visible). The check is occurrence-level: a body that links the
- * title SOMEWHERE can still carry an unlinked mention elsewhere (only
- * occurrences directly preceded by "[[" count as linked). Case-insensitive. */
+ * context is visible). SQL pre-filters on a raw substring hit, then
+ * `findUnlinkedMentionOffset` (lib/links.ts) makes the real linked/unlinked
+ * decision — alias, embed and whitespace-padded wiki links all count as
+ * linked, and ASCII titles need word boundaries. Case-insensitive. */
 export async function findUnlinkedMentions(
   user: ScopeUser,
   targetId: string,
   targetTitle: string,
   limit = 20,
 ): Promise<{ id: string; title: string; snippet: string }[]> {
-  if (targetTitle.trim().length < 2) return [];
+  if (targetTitle.trim().length < MIN_MENTION_TITLE_CHARS) return [];
   const { rows } = await query<{ id: string; title: string; body_markdown: string }>(
     `SELECT c.id, c.title, v.body_markdown
      FROM concepts c
@@ -1327,22 +1364,12 @@ export async function findUnlinkedMentions(
      LIMIT ${Math.max(1, Math.min(50, limit))}`,
     user.role === "admin" ? [targetId, targetTitle] : [targetId, targetTitle, user.id],
   );
-  const lowerTitle = targetTitle.toLowerCase();
   const out: { id: string; title: string; snippet: string }[] = [];
   for (const r of rows) {
-    const lower = r.body_markdown.toLowerCase();
-    let hit = -1;
-    let idx = lower.indexOf(lowerTitle);
-    while (idx !== -1) {
-      if (lower.slice(idx - 2, idx) !== "[[") {
-        hit = idx;
-        break;
-      }
-      idx = lower.indexOf(lowerTitle, idx + 1);
-    }
+    const hit = findUnlinkedMentionOffset(r.body_markdown, targetTitle);
     if (hit === -1) continue;
     const from = Math.max(0, hit - 40);
-    const to = hit + targetTitle.length + 40;
+    const to = hit + targetTitle.trim().length + 40;
     const snippet =
       (from > 0 ? "…" : "") +
       r.body_markdown.slice(from, to).replace(/\s+/g, " ").trim() +
@@ -1353,26 +1380,33 @@ export async function findUnlinkedMentions(
   return out;
 }
 
-/** Concepts whose current body links to `targetTitle` via `[[targetTitle]]`
- * or the alias form `[[targetTitle|display]]`, newest first — the backlink
- * panel of a concept page. */
+/** Concepts whose current body links to `targetTitle`, newest first — the
+ * backlink panel of a concept page.
+ *
+ * A single `~*` pattern rather than two ILIKE arms: `splitRefInner` trims the
+ * link target, so `[[ 标题 ]]` renders as a real link, but the old literal
+ * `%[[标题]]%` / `%[[标题|%` matchers missed every whitespace-padded form.
+ * The pattern covers plain, alias and (via the unanchored `[[`) embed links,
+ * keeping the panel consistent with what `embedWikiLinks` actually renders.
+ * The predicate stays precise in SQL on purpose — broadening it to a
+ * prefilter and filtering in JS would silently drop rows once the SQL `LIMIT`
+ * had already cut them. */
 export async function findBacklinks(
   user: ScopeUser,
   targetId: string,
   targetTitle: string,
   limit = 50,
 ): Promise<{ id: string; title: string; updated_at: string }[]> {
-  const exact = `%${escapeLike(`[[${targetTitle}]]`)}%`;
-  const aliased = `%${escapeLike(`[[${targetTitle}|`)}%`;
+  const pattern = `\\[\\[\\s*${escapeRegExp(targetTitle)}\\s*(\\]\\]|\\|)`;
   const { rows } = await query<{ id: string; title: string; updated_at: string }>(
     `SELECT c.id, c.title, c.updated_at
      FROM concepts c
      JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
-     WHERE c.id <> $1 AND c.deleted_at IS NULL AND (v.body_markdown ILIKE $2 ESCAPE '\\' OR v.body_markdown ILIKE $3 ESCAPE '\\')
-       ${user.role === "admin" ? "" : "AND c.owner_id = $4"}
+     WHERE c.id <> $1 AND c.deleted_at IS NULL AND v.body_markdown ~* $2
+       ${user.role === "admin" ? "" : "AND c.owner_id = $3"}
      ORDER BY c.updated_at DESC
      LIMIT ${Math.max(1, Math.min(200, limit))}`,
-    user.role === "admin" ? [targetId, exact, aliased] : [targetId, exact, aliased, user.id],
+    user.role === "admin" ? [targetId, pattern] : [targetId, pattern, user.id],
   );
   return rows;
 }
@@ -1397,4 +1431,33 @@ export async function getBodiesByTitles(
   );
   for (const r of rows) map.set(r.title.toLowerCase(), { id: r.id, body: r.body_markdown });
   return map;
+}
+
+/** Full current bodies keyed by concept id, viewer-scoped.
+ *
+ * `searchConcepts` deliberately returns only a ~500-char match-anchored
+ * preview of `body_markdown` (see its SELECT). Any consumer that has to reason
+ * over the *whole* document — ask's evidence selection, the claim
+ * contradiction judge — must reload it here. Passing the truncated preview to
+ * a judge instead makes it decide from an arbitrary window and produces
+ * false-positive contradictions.
+ *
+ * Ids absent from the result were deleted, moved out of scope, or never
+ * visible: callers must drop them rather than fall back to the search preview,
+ * which can be stale after a concurrent write. */
+export async function getBodiesByIds(
+  user: ScopeUser,
+  ids: string[],
+): Promise<Map<string, string>> {
+  const uniq = [...new Set(ids)].filter(Boolean);
+  if (uniq.length === 0) return new Map();
+  const { rows } = await query<{ id: string; body_markdown: string }>(
+    `SELECT c.id, v.body_markdown
+     FROM concepts c
+     JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
+     WHERE c.id = ANY($1::uuid[]) AND c.deleted_at IS NULL
+       ${user.role === "admin" ? "" : "AND c.owner_id = $2"}`,
+    user.role === "admin" ? [uniq] : [uniq, user.id],
+  );
+  return new Map(rows.map((r) => [r.id, r.body_markdown]));
 }

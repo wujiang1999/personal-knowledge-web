@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { embedWikiLinks, parseWikiLinks, segmentBodyWithLinks, splitBodyBlocks } from "../lib/links";
+import {
+  MIN_MENTION_TITLE_CHARS,
+  embedWikiLinks,
+  findUnlinkedMentionOffset,
+  parseWikiLinks,
+  segmentBodyWithLinks,
+  splitBodyBlocks,
+} from "../lib/links";
 
 describe("parseWikiLinks", () => {
   it("extracts titles in order with positions", () => {
@@ -125,5 +132,55 @@ describe("splitBodyBlocks", () => {
     const md = blocks.find((b) => b.kind === "markdown");
     expect(md && "text" in md && md.text.includes("![[A]]")).toBe(true);
     expect(md && "text" in md && md.text.includes("![[B]]")).toBe(true);
+  });
+});
+
+describe("findUnlinkedMentionOffset", () => {
+  // Shared by the concept detail page's 未链接提及 panel and `npm run curate`
+  // §5. These pin the two behaviours the separate copies used to get wrong.
+  it("finds a plain mention and returns -1 when absent", () => {
+    expect(findUnlinkedMentionOffset("讲讲 混合检索 的原理", "混合检索")).toBe(3);
+    expect(findUnlinkedMentionOffset("没有相关内容", "混合检索")).toBe(-1);
+  });
+
+  it("does not report a linked title as unlinked", () => {
+    expect(findUnlinkedMentionOffset("见 [[混合检索]]", "混合检索")).toBe(-1);
+    expect(findUnlinkedMentionOffset("见 [[混合检索|混合]]", "混合检索")).toBe(-1);
+    expect(findUnlinkedMentionOffset("嵌入 ![[混合检索]]", "混合检索")).toBe(-1);
+  });
+
+  it("treats whitespace-padded links as linked", () => {
+    // parseWikiLinks trims the target, so `[[ 混合检索 ]]` renders as a real
+    // link; the old detail-page check tested for a literal "[[" two chars
+    // back and flagged it as an *unlinked* mention instead.
+    expect(findUnlinkedMentionOffset("见 [[ 混合检索 ]]", "混合检索")).toBe(-1);
+  });
+
+  it("requires ASCII word boundaries but not CJK ones", () => {
+    expect(findUnlinkedMentionOffset("AISLE is a word", "AI")).toBe(-1);
+    expect(findUnlinkedMentionOffset("about AI today", "AI")).toBe(6);
+    expect(findUnlinkedMentionOffset("(AI)", "AI")).toBe(1);
+    // CJK has no delimiters: a substring occurrence is a mention.
+    // 这0 是1 知2 识3 库4 检5 索6 — 库检 starts at index 4.
+    expect(findUnlinkedMentionOffset("这是知识库检索", "库检")).toBe(4);
+  });
+
+  it("reports a stray mention even when the title is linked elsewhere", () => {
+    // The curate copy skipped the whole body once the title appeared inside
+    // any `[[`, hiding this second, genuinely unlinked occurrence.
+    const body = "先链接 [[混合检索]]，后面又裸提 混合检索 一次";
+    const hit = findUnlinkedMentionOffset(body, "混合检索");
+    expect(hit).toBeGreaterThan(body.indexOf("[[混合检索]]"));
+    expect(body.slice(hit, hit + 4)).toBe("混合检索");
+  });
+
+  it("ignores titles too short to be meaningful", () => {
+    expect(MIN_MENTION_TITLE_CHARS).toBe(2);
+    expect(findUnlinkedMentionOffset("a b c", "a")).toBe(-1);
+    expect(findUnlinkedMentionOffset("标题很短", " ")).toBe(-1);
+  });
+
+  it("is case-insensitive", () => {
+    expect(findUnlinkedMentionOffset("see PostgreSQL docs", "postgresql")).toBe(4);
   });
 });

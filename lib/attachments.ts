@@ -179,12 +179,16 @@ export async function deleteAttachmentRecord(id: string): Promise<Attachment | n
 
 // Inline-safety classification lives in the shared pure module (the browser
 // components import the same logic); re-exported here for the API routes.
-import { INLINE_SAFE_IMAGES } from "./attachment-mime";
+import { INLINE_SAFE_IMAGES, baseMime } from "./attachment-mime";
 export { isInlinePreviewable, previewKindFor } from "./attachment-mime";
 
-/** Sanitize a stored mime before serving it back to the browser. */
+/** Sanitize a stored mime before serving it back to the browser.
+ * Normalizes through `baseMime` because the database can hold a parameterized
+ * value (`text/html; charset=utf-8`) written before this check existed, and
+ * exact-equality blocklist tests would let that render inline as same-origin
+ * script. An unrecognized base fails closed to a forced download. */
 export function safeContentType(mime: string): string {
-  const m = (mime || "").toLowerCase();
+  const m = baseMime(mime);
   if (!m || m === "text/html") return "application/octet-stream";
   // Any script-capable image format (SVG, XML-based, ICO, …) is served only as
   // a download, never inline: the browser must not render it as a same-origin
@@ -241,14 +245,18 @@ const ALWAYS_DOWNLOAD = new Set(["text/html", "application/xhtml+xml", "applicat
  * Returns the (possibly downgraded) mime to store, or { error } to reject.
  */
 export function validateDeclaredMime(declared: string, head: Buffer): { mime?: string; error?: string } {
-  const m = (declared || "").toLowerCase().trim();
+  // Normalize FIRST: every check below is exact-equality or a prefix test, so
+  // a parameterized declaration must never reach them. Storing the base form
+  // also keeps `safeContentType` and `previewKindFor` agreeing with what was
+  // validated here at upload time.
+  const m = baseMime(declared);
   if (!m) return { mime: "application/octet-stream" };
 
   if (ALWAYS_DOWNLOAD.has(m) || (m.startsWith("image/") && !INLINE_SAFE_IMAGES.has(m) && m !== "application/pdf")) {
     return { mime: "application/octet-stream" };
   }
 
-  if ((INLINE_SAFE_IMAGES.has(m) || m === "application/pdf")) {
+  if (INLINE_SAFE_IMAGES.has(m) || m === "application/pdf") {
     const sniffed = sniffMime(head);
     if (sniffed !== m) {
       return { error: "file content does not match the declared type" };
@@ -257,7 +265,8 @@ export function validateDeclaredMime(declared: string, head: Buffer): { mime?: s
   }
 
   // text/*, audio/*, video/*, application/octet-stream, and anything else:
-  if (m.startsWith("text/") && m !== "text/html") return { mime: m };
-  if (m.startsWith("audio/") || m.startsWith("video/")) return { mime: m };
+  // stored as the bare base type. Parameters (charset, codecs) carry no
+  // information we act on, and dropping them removes the whole class of
+  // "same type, different string" mismatches between validate and serve.
   return { mime: m };
 }

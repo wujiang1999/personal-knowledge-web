@@ -28,6 +28,8 @@ fi
 rollback_dir=""
 rollback() {
   status=$?
+  trap - ERR EXIT
+  if [[ "$status" -eq 0 ]]; then return; fi
   if [[ -n "$rollback_dir" && -d "$rollback_dir" ]]; then
     echo "==> deploy failed — restoring the previous Next.js build"
     rm -rf -- "$APP_DIR/.next"
@@ -36,7 +38,7 @@ rollback() {
   fi
   exit "$status"
 }
-trap rollback ERR
+trap rollback EXIT
 
 echo "==> release commit: $(git_as_app rev-parse --short HEAD)"
 echo "==> npm ci"

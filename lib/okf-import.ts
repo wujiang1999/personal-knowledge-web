@@ -14,6 +14,44 @@ import type { ScopeUser } from "./requireUser";
 
 export const OKF_IMPORT_MAX_BYTES = 20 * 1024 * 1024;
 
+/** Read a request body with a hard byte ceiling, or null when it exceeds it.
+ *
+ * `await req.arrayBuffer()` buffers the whole stream before any length can be
+ * checked, and Content-Length is absent under chunked transfer-encoding — so a
+ * route that trusts the declared length and then calls arrayBuffer() can be
+ * driven to exhaust the heap. This reads incrementally and aborts the moment
+ * the running total passes `max`, bounding peak memory to ~max regardless of
+ * how large the client claims (or does not claim) the body to be.
+ */
+export async function readBoundedBody(req: Request, max: number): Promise<Buffer | null> {
+  // No body reader (e.g. a GET, or a runtime without a stream): fall back to
+  // arrayBuffer but still bound it afterwards.
+  if (!req.body) {
+    const buf = Buffer.from(await req.arrayBuffer());
+    return buf.length > max ? null : buf;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = req.body.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        total += value.byteLength;
+        if (total > max) {
+          // Stop reading immediately; do not buffer the rest of the stream.
+          return null;
+        }
+        chunks.push(value);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total);
+}
+
 export interface ParsedOkfDoc {
   path: string;
   title: string;
@@ -143,6 +181,9 @@ export async function importOkfZip(user: ScopeUser & { username: string }, bytes
   // Current-version hashes across the caller's scope, for the classification
   // pass. (listConceptsForExport already joins them; the export shape is a
   // convenient read model here too.)
+  //
+  // This list is MUTATED as documents are created below, so a bundle is
+  // classified against the library as it grows during the import.
   const existing: ImportExisting[] = (await listConceptsForExport(user)).map((c) => ({
     id: c.id,
     title: c.title,
@@ -183,6 +224,12 @@ export async function importOkfZip(user: ScopeUser & { username: string }, bytes
     // createConcept re-checks byte-identical bodies inside its own transaction
     // — the concurrency-safe backstop for two imports racing (classify saw a
     // stale snapshot); those surface here as duplicates, never as twins.
+    //
+    // That backstop does NOT cover two files in the SAME bundle sharing a title
+    // with different bodies. Without tracking what this import just created,
+    // the second file classified as "create" too: two same-titled concepts
+    // landed in the library and the conflict never reached the review queue,
+    // which is exactly what 同名不同内容 → conflict is supposed to guarantee.
     try {
       const id = await createConcept(
         {
@@ -197,6 +244,10 @@ export async function importOkfZip(user: ScopeUser & { username: string }, bytes
         user
       );
       report.imported.push({ id, title: doc.title });
+      // Make later docs in this bundle see it: same hash → duplicate, same
+      // title → conflict (queued for a human), matching how a pre-existing
+      // concept would have been treated.
+      existing.push({ id, title: doc.title, contentHash: sha256Hex(doc.body) });
     } catch (err) {
       if (err instanceof DuplicateBodyError) {
         report.duplicates.push({ title: doc.title, existingId: err.existingId, existingTitle: err.existingTitle });

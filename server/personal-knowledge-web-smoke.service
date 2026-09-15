@@ -1,0 +1,20 @@
+[Unit]
+Description=personal-knowledge-web public HTTPS smoke probe (every 5 minutes)
+Documentation=https://github.com/wujiang1999/personal-knowledge-web
+# The alert drop-in (systemd-drops/personal-knowledge-web-smoke.service.alert.conf)
+# attaches OnFailure=kb-alert@%n.service, so a run of failed probes pages
+# instead of only being visible in `systemctl status`.
+After=network-online.target personal-knowledge-web.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=knowledge-web
+Group=knowledge-web
+WorkingDirectory=/opt/personal-knowledge-web
+Environment=HOME=/var/lib/knowledge-web
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/npm run smoke:prod
+# Probes use a 10s fetch timeout each (scripts/smoke-production.mjs); this is
+# the outer guard so a hung connection cannot hold the unit open forever.
+TimeoutStartSec=90s

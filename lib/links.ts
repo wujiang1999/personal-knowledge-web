@@ -155,3 +155,62 @@ export function embedWikiLinks(body: string): string {
   out += body.slice(cursor);
   return out;
 }
+
+/** Shorter titles are pure noise for mention scanning: every two-character
+ * fragment of a longer word would "mention" them. Shared by the concept
+ * detail page and the curate report. */
+export const MIN_MENTION_TITLE_CHARS = 2;
+
+/** Escape RegExp metacharacters so a concept title can be embedded in a
+ * pattern. Titles are arbitrary user text (`a*b`, `C++`, `(草稿)`, `x[1]`),
+ * and `findBacklinks` builds a PostgreSQL `~*` pattern from them. */
+export function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Offset of the first genuine *unlinked* mention of `title` in `body`, or -1.
+ *
+ * One predicate, two consumers (concept detail page's 未链接提及 panel and
+ * `npm run curate` §5). They had drifted apart:
+ *  - the detail-page copy tested `body.slice(idx-2, idx) !== "[["`, so an
+ *    Obsidian-style `[[ 标题 ]]` — which `splitRefInner` trims and therefore
+ *    renders as a real link — was reported as an *unlinked* mention;
+ *  - the curate copy skipped a body wholesale on `body.includes("[[" + title)`,
+ *    so one linked occurrence hid every other stray mention in the same note.
+ *
+ * Spans come from `parseWikiLinks`, so plain / alias (`[[标题|别名]]`) / embed
+ * (`![[标题]]`) / whitespace-padded forms are all recognised as linked. ASCII
+ * titles additionally require a non-alphanumeric neighbour on both sides, so
+ * "AI" cannot match inside "AISLE"; CJK has no word delimiters, so the check
+ * does not apply to it. */
+export function findUnlinkedMentionOffset(body: string, title: string): number {
+  const needle = title.trim();
+  if (needle.length < MIN_MENTION_TITLE_CHARS) return -1;
+
+  const lowerBody = body.toLowerCase();
+  const lowerNeedle = needle.toLowerCase();
+  if (!lowerBody.includes(lowerNeedle)) return -1;
+
+  const linkedSpans = parseWikiLinks(body);
+  const ascii = isAsciiTitle(needle);
+
+  let idx = lowerBody.indexOf(lowerNeedle);
+  while (idx !== -1) {
+    const end = idx + lowerNeedle.length;
+    const insideLink = linkedSpans.some((r) => idx >= r.start && end <= r.end);
+    if (!insideLink) {
+      if (!ascii) return idx;
+      const before = idx > 0 ? lowerBody[idx - 1] : " ";
+      const after = end < lowerBody.length ? lowerBody[end] : " ";
+      if (!/[a-z0-9]/.test(before) && !/[a-z0-9]/.test(after)) return idx;
+    }
+    idx = lowerBody.indexOf(lowerNeedle, idx + 1);
+  }
+  return -1;
+}
+
+/** Pure-ASCII titles are the ones that need word-boundary handling; CJK and
+ * other scripts have no delimiter to respect. */
+function isAsciiTitle(title: string): boolean {
+  return /^[\x20-\x7e]+$/.test(title);
+}

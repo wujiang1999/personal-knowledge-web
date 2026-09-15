@@ -56,6 +56,10 @@ async function main() {
   let totalClaims = 0;
   let totalChecked = 0;
   let totalSkipped = 0;
+  /** Targets whose audit threw. Kept separate from findings: a target that
+   * errored was never examined, which is a different claim than "examined, no
+   * contradictions found". */
+  const erroredTargets: { title: string; reason: string }[] = [];
   const allFindings: { source: string; finding: ClaimFinding }[] = [];
 
   for (const target of targets) {
@@ -70,12 +74,18 @@ async function main() {
       totalSkipped += outcome.skippedWeak;
       for (const f of outcome.findings) allFindings.push({ source: outcome.title, finding: f });
     } catch (err) {
-      console.error(`[claims] ${target.title} 审计失败:`, err instanceof Error ? err.message : err);
+      const reason = err instanceof Error ? err.message : String(err);
+      erroredTargets.push({ title: target.title, reason });
+      console.error(`[claims] ${target.title} 审计失败:`, reason);
     }
   }
 
   console.log(`\n== claim 审计报告（${write ? "已入队" : "dry-run"}）==`);
   console.log(`条目 ${targets.length} 个 · 抽取主张 ${totalClaims} 条 · 做了矛盾判定 ${totalChecked} 条 · 跳过(无相关候选) ${totalSkipped} 条`);
+  if (erroredTargets.length) {
+    console.log(`审计失败 ${erroredTargets.length} 个条目（未检查）:`);
+    for (const e of erroredTargets) console.log(`  ✗ 《${e.title}》: ${e.reason}`);
+  }
   console.log(`发现矛盾 ${allFindings.length} 条:`);
   for (const { source, finding } of allFindings) {
     const queued = finding.reviewId ? ` → 待裁决 ${finding.reviewId.slice(0, 8)}` : "";
@@ -85,6 +95,15 @@ async function main() {
     console.log("  （没有发现事实矛盾）");
   } else if (!write) {
     console.log("\n加 --write 可把这些矛盾写进审核队列，在网页 /reviews 裁决。");
+  }
+  if (erroredTargets.length) {
+    // This runs under personal-knowledge-web-claims.timer, whose
+    // OnFailure=kb-alert@%n.service is the only notification path. Exiting 0
+    // with every target errored (expired LLM key, provider outage, DB down)
+    // reported a clean weekly audit and never alerted — the contradiction
+    // sweep could stop working for weeks unnoticed.
+    console.error(`[claims] ${erroredTargets.length}/${targets.length} 个条目审计失败，退出码 1`);
+    process.exitCode = 1;
   }
   await closePool();
 }

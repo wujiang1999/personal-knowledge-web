@@ -18,9 +18,17 @@ export const DEPRECATED_FACTOR = 0.25;
 export const MAX_QUERY_TERMS = 24;
 
 /** TokenBigram-shaped query terms: lowercase ASCII word runs + CJK bigrams,
- * deduplicated in first-occurrence order. Punctuation-only runs are dropped.
- * The array ships to SQL as one parameter, so the statement text (and its
- * prepared-statement plan) is term-count independent. */
+ * deduplicated in first-occurrence order. Punctuation splits terms rather than
+ * being stripped. The array ships to SQL as one parameter, so the statement
+ * text (and its prepared-statement plan) is term-count independent.
+ *
+ * The run regex splits ASCII from everything else but does NOT split a CJK run
+ * at punctuation, so `知识库，检索` arrives as one run. Stripping the
+ * punctuation there would glue it into `知识库检索` and emit the cross-boundary
+ * bigram `库检`, which then matches any document where 库 happens to sit next
+ * to 检 (数据库检索优化) and inflates its BM25 score. Splitting first keeps the
+ * two phrases independent — and stops phantom terms from crowding real ones
+ * out of MAX_QUERY_TERMS. */
 export function tokenizeQuery(needle: string): string[] {
   const terms: string[] = [];
   const push = (t: string) => {
@@ -30,11 +38,14 @@ export function tokenizeQuery(needle: string): string[] {
     if (/[a-z0-9_]/.test(run)) {
       push(run);
     } else if (/[\p{L}\p{N}]/u.test(run)) {
-      // Non-ASCII run: strip embedded punctuation, then sliding 2-grams
-      // (TokenBigram emits full grams only; a 1-char run is its own term).
-      const letters = run.replace(/[^\p{L}\p{N}]/gu, "");
-      if (letters.length === 1) push(letters);
-      else for (let i = 0; i + 2 <= letters.length; i++) push(letters.slice(i, i + 2));
+      // Non-ASCII run: split on any non-letter/non-digit so punctuation is a
+      // term boundary, then sliding 2-grams per segment (TokenBigram emits
+      // full grams only; a 1-char segment is its own term).
+      for (const segment of run.split(/[^\p{L}\p{N}]+/u)) {
+        if (!segment) continue;
+        if (segment.length === 1) push(segment);
+        else for (let i = 0; i + 2 <= segment.length; i++) push(segment.slice(i, i + 2));
+      }
     }
   }
   return terms.slice(0, MAX_QUERY_TERMS);

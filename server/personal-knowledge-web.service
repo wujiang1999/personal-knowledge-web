@@ -1,0 +1,33 @@
+[Unit]
+Description=personal-knowledge-web (Next.js knowledge base)
+Documentation=file:/opt/personal-knowledge-web/docs/ARCHITECTURE.md
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+
+[Service]
+Type=simple
+User=knowledge-web
+Group=knowledge-web
+WorkingDirectory=/opt/personal-knowledge-web
+# `next start` loads .env from the working directory itself, so the secrets
+# stay in the app directory (mode 600) instead of being duplicated into
+# Environment= lines where `systemctl show` would expose them.
+Environment=HOME=/var/lib/knowledge-web
+Environment=NODE_ENV=production
+Environment=PORT=3000
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=3
+
+# Hardening, mirroring what DEPLOYMENT.md 2026-08-28 records for the live unit
+# ("NoNewPrivileges、ProtectSystem=full，仅 data/ 可写"). Keep these in step with
+# the server: this file is a reconstruction for rebuild, and installing a
+# stricter variant than the one actually running could break the service (the
+# app writes both ATTACHMENT_DIR and Next.js's .next/cache at runtime).
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

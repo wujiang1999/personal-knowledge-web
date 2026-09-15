@@ -18,14 +18,23 @@ const DUMMY_HASH =
   "$2a$12$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 /**
- * Client IP for rate-limiting. Behind a reverse proxy (Caddy/nginx per README)
- * the real client is the first entry of X-Forwarded-For; fall back to
- * X-Real-IP, then "unknown". The throttle keys on `username|ip`, so a flood
- * from one IP can't lock out other clients.
+ * Client IP for rate-limiting. The throttle keys on `username|ip`, so a flood
+ * from one IP can't lock out other clients — which means the value must not be
+ * attacker-chosen, or the lockout is bypassable by rotating a header.
+ *
+ * Takes the LAST hop, not the first: a proxy either overwrites the header with
+ * the peer address (Caddy's behaviour here — verified 2026-09-14 by sending a
+ * fixed forged value and then an unheadered request from the same source; both
+ * landed on one throttle key) or appends the peer to any client-supplied list.
+ * Under overwrite both ends are the real IP; under append the last entry is
+ * what the trusted edge added and the first is caller-controlled. Reading the
+ * last hop is therefore safe either way, while reading the first is safe only
+ * for as long as the edge keeps overwriting.
  */
 function clientIp(req: NextRequest): string {
   const fwd = req.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0].trim();
+  const lastHop = fwd?.split(",").at(-1)?.trim();
+  if (lastHop) return lastHop;
   return req.headers.get("x-real-ip")?.trim() || "unknown";
 }
 

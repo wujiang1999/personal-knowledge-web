@@ -1,7 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  MAX_ATTACHMENT_BYTES,
-  MAX_TOTAL_ATTACHMENT_BYTES,
   isInlinePreviewable,
   safeContentType,
   sniffMime,
@@ -114,8 +112,106 @@ describe("validateDeclaredMime", () => {
   });
 });
 
-describe("attachment quota defaults", () => {
-  it("is never smaller than the individual upload cap", () => {
-    expect(MAX_TOTAL_ATTACHMENT_BYTES).toBeGreaterThanOrEqual(MAX_ATTACHMENT_BYTES);
+describe("parameterized MIME cannot smuggle a script-capable type", () => {
+  // Regression: every safety check is exact-equality or a prefix test, so a
+  // trailing `; charset=…` used to carry text/html past the blocklist, get
+  // stored, and then be served inline — same-origin script execution.
+  const HTML_DOC = Buffer.from("<html><script>alert(document.cookie)</script></html>");
+
+  it("downgrades text/html regardless of parameters", () => {
+    expect(validateDeclaredMime("text/html; charset=utf-8", HTML_DOC)).toEqual({
+      mime: "application/octet-stream",
+    });
+    expect(validateDeclaredMime("TEXT/HTML;charset=UTF-8", HTML_DOC)).toEqual({
+      mime: "application/octet-stream",
+    });
+  });
+
+  it("downgrades svg / xml / xhtml with parameters", () => {
+    expect(validateDeclaredMime("image/svg+xml; charset=utf-8", SVG_HEAD).mime).toBe(
+      "application/octet-stream",
+    );
+    expect(validateDeclaredMime("application/xml; charset=utf-8", HTML_DOC).mime).toBe(
+      "application/octet-stream",
+    );
+    expect(validateDeclaredMime("application/xhtml+xml; charset=utf-8", HTML_DOC).mime).toBe(
+      "application/octet-stream",
+    );
+  });
+
+  it("still sniffs a bitmap declared with parameters", () => {
+    expect(validateDeclaredMime("image/png; charset=binary", PNG_HEAD)).toEqual({
+      mime: "image/png",
+    });
+    // parameters must not defeat the content match either
+    expect(validateDeclaredMime("image/png; charset=binary", JPEG_HEAD).error).toBeTruthy();
+  });
+
+  it("stores the bare base type so serve and validate agree", () => {
+    expect(validateDeclaredMime("text/plain; charset=utf-8", Buffer.from("hi"))).toEqual({
+      mime: "text/plain",
+    });
+    expect(validateDeclaredMime("video/mp4; codecs=avc1", Buffer.alloc(64))).toEqual({
+      mime: "video/mp4",
+    });
+  });
+
+  it("serves a pre-existing parameterized row as a forced download", () => {
+    // Rows written before normalization can still hold the parameterized form;
+    // the serve path must not trust the stored string.
+    expect(safeContentType("text/html; charset=utf-8")).toBe("application/octet-stream");
+    expect(isInlinePreviewable("text/html; charset=utf-8")).toBe(false);
+    expect(previewKindFor("image/svg+xml; charset=utf-8")).toBe("other");
+  });
+
+  it("fails closed on malformed MIME", () => {
+    expect(safeContentType("; charset=utf-8")).toBe("application/octet-stream");
+    expect(safeContentType("text/html")).toBe("application/octet-stream");
+    expect(isInlinePreviewable("nonsense")).toBe(false);
+    expect(isInlinePreviewable("")).toBe(false);
+    expect(validateDeclaredMime("text/html; charset=utf-8; boundary=x", HTML_DOC).mime).toBe(
+      "application/octet-stream",
+    );
+  });
+});
+
+describe("per-user attachment quota clamp", () => {
+  // MAX_TOTAL_ATTACHMENT_BYTES is computed at module load from process.env, so
+  // each case needs a fresh import — a static import cannot observe the clamp
+  // (the test-load-boundary exception). The prior assertion here compared two
+  // module constants and could not fail: the value is either clamped by the
+  // guard or the 2 GiB default. These pin the clamp itself.
+  async function quotaWith(value: string | undefined) {
+    vi.resetModules();
+    if (value === undefined) delete process.env.MAX_TOTAL_ATTACHMENT_BYTES;
+    else process.env.MAX_TOTAL_ATTACHMENT_BYTES = value;
+    const m = await import("../lib/attachments");
+    return { total: m.MAX_TOTAL_ATTACHMENT_BYTES, perFile: m.MAX_ATTACHMENT_BYTES };
+  }
+
+  afterEach(() => {
+    delete process.env.MAX_TOTAL_ATTACHMENT_BYTES;
+  });
+
+  it("defaults to 2 GiB when unset", async () => {
+    const { total } = await quotaWith(undefined);
+    expect(total).toBe(2 * 1024 * 1024 * 1024);
+  });
+
+  it("honours a configured quota above the per-file cap", async () => {
+    const { total } = await quotaWith(String(20 * 1024 * 1024 * 1024));
+    expect(total).toBe(20 * 1024 * 1024 * 1024);
+  });
+
+  it("falls back to the default rather than a below-file-cap quota", async () => {
+    // A quota smaller than one file would reject every upload; clamp instead.
+    const { total, perFile } = await quotaWith("1024");
+    expect(total).toBe(2 * 1024 * 1024 * 1024);
+    expect(total).toBeGreaterThan(perFile);
+  });
+
+  it("falls back to the default on a non-numeric or fractional value", async () => {
+    expect((await quotaWith("abc")).total).toBe(2 * 1024 * 1024 * 1024);
+    expect((await quotaWith("1.5")).total).toBe(2 * 1024 * 1024 * 1024);
   });
 });

@@ -1,7 +1,6 @@
 import { getLlmChatConfig } from "./config";
 import { splitConceptBody } from "./chunks";
-import { searchConcepts } from "./concepts";
-import { query } from "./db";
+import { getBodiesByIds, searchConcepts } from "./concepts";
 import { llmChatJsonWith } from "./llm";
 import { cachedQueryVector, relevantChunksForConcepts } from "./semantic";
 import { tokenizeQuery } from "./bm25";
@@ -118,21 +117,15 @@ export function selectLexicalChunk(body: string, question: string) {
   return best;
 }
 
-/** 检索候选并选择每篇资料最相关的当前分块。全文仍由一条、owner-scoped
- * 查询新鲜读取，用来核对偏移并在分块索引暂不可用时安全降级。 */
+/** 检索候选并选择每篇资料最相关的当前分块。全文由 getBodiesByIds 新鲜读取
+ * （owner-scoped），用来核对偏移并在分块索引暂不可用时安全降级。 */
 export async function collectSources(user: ScopeUser, question: string, k: number): Promise<AskSource[]> {
   const { results } = await searchConcepts(user, question, k, 0, "api");
   if (results.length === 0) return [];
-  const ids = results.map((r) => r.id);
-  const { rows } = await query<{ id: string; body_markdown: string }>(
-    `SELECT c.id, v.body_markdown
-       FROM concepts c
-       JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
-      WHERE c.id = ANY($1::uuid[]) AND c.deleted_at IS NULL
-        ${user.role === "admin" ? "" : "AND c.owner_id = $2"}`,
-    user.role === "admin" ? [ids] : [ids, user.id],
+  const bodies = await getBodiesByIds(
+    user,
+    results.map((r) => r.id)
   );
-  const bodies = new Map(rows.map((r) => [r.id, r.body_markdown]));
   const freshResults = results.filter((result) => bodies.has(result.id));
   if (freshResults.length === 0) return [];
   const vector = await cachedQueryVector(question, {
@@ -310,7 +303,12 @@ export async function executeAskTask(
   try {
     if (!(await claimTask(taskId))) return; // 已被领走/已结束：不重复执行
     const result = await answerQuestion(user, question, k, { userId: user.id, apiKeyId: user.apiKeyId });
-    await finishTask(taskId, result);
+    // finishTask only lands while the task is still running. A reaped lease
+    // (process stalled past TASK_LEASE_SECONDS) means the user already sees a
+    // failure, so log the discard rather than silently resurrect it.
+    if (!(await finishTask(taskId, result))) {
+      console.error("[ask] 结果被丢弃：任务已不在执行中（租约超时或已结束）:", taskId);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[ask] 任务失败:", taskId, message);
