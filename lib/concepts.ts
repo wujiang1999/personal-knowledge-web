@@ -645,6 +645,11 @@ export async function searchConcepts(
          ), 0)
          FROM unnest($2::text[]) AS t(term)
          JOIN df d ON d.term = t.term
+         -- stats must come BEFORE the lateral: a LATERAL item can only see
+         -- FROM items to its left, and the tf expression reads s.avg_*. (The
+         -- pre-change query kept its stats subquery in the outer select list,
+         -- where this ordering constraint does not apply.)
+         CROSS JOIN stats s
          CROSS JOIN LATERAL (
            SELECT
                ${FIELD_WEIGHTS.title} * GREATEST(char_length(c.title)
@@ -661,7 +666,6 @@ export async function searchConcepts(
                  / (1 - ${BM25_B} + ${BM25_B} * c.len_body / s.avg_body)
              AS tilde
          ) tfx
-         CROSS JOIN stats s
         ) AS bm25
       FROM corpus c
     )
