@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { conceptToMarkdown } from "../lib/okf";
 import {
   classifyImport,
   isConceptFile,
@@ -9,6 +10,23 @@ import {
 } from "../lib/okf-import";
 
 const existing = (id: string, title: string, hash: string): ImportExisting => ({ id, title, contentHash: hash });
+
+/** Minimal ExportConcept for the round-trip tests below. */
+const concept = {
+  id: "11111111-2222-3333-4444-555555555555",
+  type: "Note",
+  title: "T",
+  description: null,
+  category: null,
+  status: "stable",
+  tags: [],
+  current_version: 1,
+  body_markdown: "正文",
+  content_hash: "sha256:abc",
+  generated_by: "human:admin",
+  updated_at: "2026-09-16T00:00:00.000Z",
+  version_created_at: "2026-09-16T00:00:00.000Z",
+};
 
 describe("isConceptFile", () => {
   it("keeps entry markdown, drops indexes/logs/non-md", () => {
@@ -25,21 +43,47 @@ describe("isConceptFile", () => {
 
 describe("stripExportHeading", () => {
   it("removes exactly the exporter's wrapper", () => {
-    expect(stripExportHeading("\n# 标题\n\n正文第一行\n", "标题")).toBe("正文第一行");
-    expect(stripExportHeading("\n# 标题\n\n正文第一行\n\n", "标题")).toBe("正文第一行\n");
-    expect(stripExportHeading("\n# 标题\n\n正文\n", "标题")).toBe("正文");
+    expect(stripExportHeading("\n# 标题\n\n正文第一行\n", "标题", false)).toBe("正文第一行");
+    expect(stripExportHeading("\n# 标题\n\n正文第一行\n\n", "标题", false)).toBe("正文第一行\n");
+    expect(stripExportHeading("\n# 标题\n\n正文\n", "标题", false)).toBe("正文");
   });
   it("keeps bodies whose first line is not the exported H1", () => {
-    expect(stripExportHeading("# 别的\n", "标题")).toBe("# 别的\n");
+    expect(stripExportHeading("# 别的\n", "标题", false)).toBe("# 别的\n");
+  });
+  it("keeps a body's own H1 but still undoes the file decoration", () => {
+    // `kb.title_heading: body` — the H1 is content, so it survives; the blank
+    // line after the frontmatter and the trailing newline are still the
+    // exporter's wrapping and must come off for the round trip to be exact.
+    expect(stripExportHeading("\n# 标题\n\n正文\n", "标题", true)).toBe("# 标题\n\n正文");
   });
   it("round-trips any stored body byte-exactly (the 2026-09-10 false-conflict bug)", () => {
-    // 导出器写 `# {title}\n\n{body}\n`;只要去掉的"包装"多一个字节,
-    // content_hash 就不再相等,恢复导入会把每条都判成同名异内容。
-    const exported = (title: string, body: string) =>
-      `---\ntitle: ${title}\ntype: Note\nstatus: stable\n---\n\n# ${title}\n\n${body}\n`;
-    for (const body of ["正文", "正文\n", "正文\n\n", "一\n\n二", "  缩进\n结尾  ", "# 非标题首行"]) {
-      expect(stripExportHeading(exported("T", body).replace(/^[\s\S]*?---\n\n/, ""), "T")).toBe(body);
+    // Runs the real exporter rather than a copy of its format string: the two
+    // sides have to agree byte-for-byte or a restore-import turns every entry
+    // into a false "same title, different content" conflict, and a hand-rolled
+    // fixture cannot catch drift between them.
+    const bodies = [
+      "正文",
+      "正文\n",
+      "正文\n\n",
+      "一\n\n二",
+      "  缩进\n结尾  ",
+      "# 非标题首行",
+      "# T\n\n正文",
+      "# T\n\n正文\n",
+      "# T\n\n# 二级\n\n正文",
+      "> 引用\n\n# T\n\n正文",
+    ];
+    for (const body of bodies) {
+      const exported = conceptToMarkdown({ ...concept, body_markdown: body }).content;
+      const { doc, error } = parseOkfMarkdown("notes/t.md", exported);
+      expect(error).toBeUndefined();
+      expect(doc!.body).toBe(body);
     }
+  });
+  it("still strips for bundles written before kb.title_heading existed", () => {
+    const legacy = "---\ntype: Note\ntitle: 标题\nstatus: stable\n---\n\n# 标题\n\n正文\n";
+    const { doc } = parseOkfMarkdown("notes/x.md", legacy);
+    expect(doc!.body).toBe("正文");
   });
 });
 

@@ -89,7 +89,7 @@ export default async function KnowledgePage({
           <input
             name="q"
             defaultValue={query ?? ""}
-            placeholder="搜索…支持 tag: category: status: 算子"
+            placeholder="搜索…支持 tag: category: status: type: 算子"
             className="w-full max-w-md rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500"
           />
           <button

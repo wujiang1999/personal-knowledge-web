@@ -1,6 +1,58 @@
 import { describe, expect, it } from "vitest";
-import { buildCategoryTree, normalizeCategory, sha256Hex, type Concept } from "../lib/concepts";
+import { attachSections, buildCategoryTree, normalizeCategory, sha256Hex, type Concept, type SearchResult } from "../lib/concepts";
 import { escapeLike } from "../lib/search-syntax";
+
+describe("attachSections", () => {
+  const hit = (id: string, matchAt?: number): SearchResult => ({
+    id,
+    type: "Note",
+    title: "t",
+    description: null,
+    category: null,
+    status: "stable",
+    tags: [],
+    current_version: 1,
+    attachment_count: 0,
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    body_markdown: "preview",
+    score: 1,
+    ...(matchAt === undefined ? {} : { match_at: matchAt }),
+  });
+  const body = "# 顶层\n\n## 小节\n\n正文在这里。\n";
+
+  it("labels a hit with its heading path and never leaks the anchor", () => {
+    const [out] = attachSections([hit("a", body.indexOf("正文"))], new Map([["a", body]]));
+    expect(out.section).toBe("顶层 > 小节");
+    expect(out).not.toHaveProperty("match_at");
+  });
+
+  it("omits section above the first heading and keeps other rows intact", () => {
+    const out = attachSections(
+      [hit("a", 1), hit("b", body.indexOf("正文"))],
+      new Map([
+        ["a", "没有标题的正文"],
+        ["b", body],
+      ]),
+    );
+    expect(out[0]).not.toHaveProperty("section");
+    expect(out[0]).not.toHaveProperty("match_at");
+    expect(out[1].section).toBe("顶层 > 小节");
+  });
+
+  it("drops the field for a body that vanished between the two reads", () => {
+    const [out] = attachSections([hit("gone", 10)], new Map());
+    expect(out).not.toHaveProperty("section");
+    expect(out).not.toHaveProperty("match_at");
+    expect(out.body_markdown).toBe("preview");
+  });
+
+  it("gives no section to rows with no match anchor (operator-only listing)", () => {
+    const [out] = attachSections([hit("a")], new Map([["a", body]]));
+    expect(out).not.toHaveProperty("section");
+    expect(out).not.toHaveProperty("match_at");
+  });
+});
 
 describe("escapeLike", () => {
   it("escapes % _ and backslash", () => {

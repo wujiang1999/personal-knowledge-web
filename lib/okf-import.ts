@@ -76,18 +76,31 @@ export function isConceptFile(path: string): boolean {
 
 /** Strip the exported `# {title}` H1 wrapper so a round trip is byte-exact.
  *
- * The exporter emits `\n\n# {title}\n\n{body}\n`, so the inverse removes
+ * The exporter emits `\n\n# {title}\n\n{body}\n` — so the inverse removes
  * exactly that decoration: one leading blank line, the H1, one blank line and
  * one trailing newline. Nothing else is normalized — an earlier version also
  * trimmed the body and re-appended a newline, which silently changed every
  * body that did not already end with one and turned restore-imports into a
- * wall of false "same title, different content" conflicts (2026-09-10). */
-export function stripExportHeading(body: string, title: string): string {
+ * wall of false "same title, different content" conflicts (2026-09-10).
+ *
+ * When the exporter found the title already in the body it injected nothing
+ * and said so (`kb.title_heading: body`); stripping in that case would delete
+ * the body's own heading, so the caller passes `headingInBody` and this
+ * function does nothing. A missing key means a bundle from before the field
+ * existed, i.e. an injected wrapper. */
+export function stripExportHeading(body: string, title: string, headingInBody: boolean): string {
+  // The exporter writes `---\n{frontmatter}---\n\n{…}\n`, so around the stored
+  // body there is always exactly one leading blank line and one trailing
+  // newline. Remove those, then — only when the exporter injected the wrapper
+  // — the H1 and the blank line it added. When it injected nothing, an H1 here
+  // is the body's own content and must survive.
   const lead = body.startsWith("\r\n") ? 2 : body.startsWith("\n") ? 1 : 0;
   const lines = body.slice(lead).split("\n");
-  if ((lines[0] ?? "").trim() !== `# ${title.trim()}`) return body;
-  lines.shift();
-  if ((lines[0] ?? "").trim() === "") lines.shift(); // the exporter's single blank line
+  if (!headingInBody) {
+    if ((lines[0] ?? "").trim() !== `# ${title.trim()}`) return body;
+    lines.shift();
+    if ((lines[0] ?? "").trim() === "") lines.shift(); // the exporter's single blank line
+  }
   const out = lines.join("\n");
   return out.endsWith("\n") ? out.slice(0, -1) : out; // the exporter's single trailing newline
 }
@@ -118,7 +131,13 @@ export function parseOkfMarkdown(path: string, content: string): { doc?: ParsedO
     typeof rec.description === "string" && rec.description.trim() ? rec.description.trim().slice(0, 1000) : null;
   const category = typeof rec.category === "string" && rec.category.trim() ? rec.category.trim().slice(0, 200) : null;
 
-  const body = stripExportHeading(content.slice(fmMatch[0].length), title);
+  // The one kb.* key the import reads: it says whether the exporter injected
+  // the `# title` wrapper or the body already carried its own heading. Absent
+  // (older bundles) means injected.
+  const kbBlock = typeof rec.kb === "object" && rec.kb !== null ? (rec.kb as Record<string, unknown>) : null;
+  const headingInBody = kbBlock?.title_heading === "body";
+
+  const body = stripExportHeading(content.slice(fmMatch[0].length), title, headingInBody);
   if (!body.trim()) return { error: "正文为空" };
 
   return {

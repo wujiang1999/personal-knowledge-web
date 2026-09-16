@@ -81,13 +81,19 @@ export async function rerankWithSemantic<T extends { id: string; score: number }
     )[0];
   const semCands = await semanticCandidates(user, vector, Math.max(limit * 2, 20), filters);
   const simById = new Map(semCands.map((c) => [c.id, c.similarity]));
+  // Semantic-only rows have no lexical anchor, so their `section` comes from
+  // the chunk that matched (searchConcepts reads this back through match_at).
+  const atById = new Map(semCands.map((c) => [c.id, c.startOffset]));
   const fused = rrfMerge<{ id: string }>([lexical, semCands.map((c) => ({ id: c.id }))]);
 
   const lexicalById = new Map(lexical.map((r) => [r.id, r]));
   const semOnlyIds = fused.filter((f) => !lexicalById.has(f.item.id)).map((f) => f.item.id);
   const semRows = semOnlyIds.length ? await conceptRowsForIds(user, semOnlyIds) : [];
   const semById = new Map(
-    semRows.map((r) => [r.id, { ...r, score: 0, similarity: simById.get(r.id) } as unknown as T]),
+    semRows.map((r) => [
+      r.id,
+      { ...r, score: 0, similarity: simById.get(r.id), match_at: atById.get(r.id) } as unknown as T,
+    ]),
   );
 
   const out: T[] = [];
@@ -104,18 +110,77 @@ export async function rerankWithSemantic<T extends { id: string; score: number }
   return out;
 }
 
+/** Chunk-level recall pool: how many chunks (not concepts) the vector scan
+ * returns before de-duplication. A concept is re-derived from its chunks, and a
+ * long note can hold several of the nearest chunks, so the pool is a multiple
+ * of the requested concept count with a floor. */
+const SEMANTIC_CHUNKS_PER_CONCEPT = 3;
+const SEMANTIC_CHUNK_POOL_MIN = 60;
+/** pgvector's default hnsw.ef_search is 40; asking for a bigger pool than that
+ * silently returns fewer rows, so the query raises it (SET LOCAL, transaction
+ * scoped — the pooled connection is left clean). */
+const HNSW_EF_SEARCH_MIN = 100;
+
+/** One concept's best chunk inside the pool. */
+export interface SemanticCandidate {
+  id: string;
+  /** Cosine similarity (0–1) of the best chunk — the scale-independent signal
+   * downstream thresholds use. Never an aggregate: `similarity` keeps its
+   * "closeness of one passage" meaning. */
+  similarity: number;
+  /** Offset of that chunk in the current body, for section labels. */
+  startOffset: number;
+}
+
+/** Collapse chunk hits to one candidate per concept. The nearest chunk wins
+ * and donates its offsets; the number of that concept's chunks inside the pool
+ * breaks similarity ties (a concept matching in three places is a better
+ * answer than one matching in a single spot), but is not exposed — callers
+ * keep seeing a 0–1 similarity. */
+export function aggregateChunkHits(
+  hits: readonly { id: string; similarity: number; startOffset: number }[],
+  limit: number,
+): SemanticCandidate[] {
+  const best = new Map<string, SemanticCandidate & { hits: number }>();
+  for (const hit of hits) {
+    const seen = best.get(hit.id);
+    if (!seen) {
+      best.set(hit.id, { ...hit, hits: 1 });
+      continue;
+    }
+    seen.hits += 1;
+    if (hit.similarity > seen.similarity) {
+      seen.similarity = hit.similarity;
+      seen.startOffset = hit.startOffset;
+    }
+  }
+  return [...best.values()]
+    .sort((a, b) => b.similarity - a.similarity || b.hits - a.hits)
+    .slice(0, limit)
+    .map((c) => ({ id: c.id, similarity: c.similarity, startOffset: c.startOffset }));
+}
+
 /** Top concepts by cosine similarity to the query vector, owner-scoped.
  * Similarity rides along (1 − cosine distance) because downstream callers —
  * notably the MCP write-path judge — need a scale-independent relatedness
- * signal; the fused display score is not comparable across result kinds. */
+ * signal; the fused display score is not comparable across result kinds.
+ *
+ * Retrieval is chunk-level: HNSW ranks chunks, then hits are collapsed per
+ * concept. This replaced `DISTINCT ON (concept_id) … ORDER BY concept_id,
+ * distance`, which could not use the vector index at all — it walked every
+ * chunk of every in-scope concept on each search (≈30 rows per concept here,
+ * unbounded as the library grows) and then sorted the whole set in JS. The
+ * index-backed top-N pool is bounded by construction; what it gives up is
+ * exactness on the tail of the ranking, which RRF only sees through positions
+ * and pgvector is approximate on anyway. */
 export async function semanticCandidates(
   user: ScopeUser,
   queryVector: number[],
   limit: number,
-  /** Search-operator filters (tag:/category:/status:) — without them the
+  /** Search-operator filters (tag:/category:/status:/type:) — without them the
    * vector recall would leak rows the lexical path just filtered out. */
   filters?: ParsedQuery,
-): Promise<{ id: string; similarity: number }[]> {
+): Promise<SemanticCandidate[]> {
   const cfg = getLlmEmbeddingConfig();
   if (!cfg) return [];
   const params: unknown[] = [toVectorLiteral(queryVector)];
@@ -132,17 +197,37 @@ export async function semanticCandidates(
   if (user.role !== "admin") clauses.push(`c.owner_id = $${(params.push(user.id), params.length)}`);
   if (filters) clauses.push(...operatorFilterClauses(filters, params));
   const where = "WHERE " + clauses.join(" AND ");
-  const { rows } = await query<{ id: string; similarity: number }>(
-    `SELECT DISTINCT ON (cec.concept_id)
-            cec.concept_id AS id, 1 - (cec.embedding <=> $1::vector) AS similarity
-     FROM concept_embedding_chunks cec
-     JOIN concepts c ON c.id = cec.concept_id
-     JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
-     ${where}
-     ORDER BY cec.concept_id, cec.embedding <=> $1::vector`,
-    params,
+  // Pool size is a bounded integer derived from `limit`, never user text.
+  const pool = Math.max(limit * SEMANTIC_CHUNKS_PER_CONCEPT, SEMANTIC_CHUNK_POOL_MIN);
+  const efSearch = Math.max(pool, HNSW_EF_SEARCH_MIN);
+  const client = await getPool().connect();
+  let rows: { id: string; similarity: number; start_offset: number }[];
+  try {
+    await client.query("BEGIN");
+    await client.query(`SET LOCAL hnsw.ef_search = ${Math.trunc(efSearch)}`);
+    ({ rows } = await client.query<{ id: string; similarity: number; start_offset: number }>(
+      `SELECT cec.concept_id AS id,
+              cec.start_offset,
+              1 - (cec.embedding <=> $1::vector) AS similarity
+       FROM concept_embedding_chunks cec
+       JOIN concepts c ON c.id = cec.concept_id
+       JOIN concept_versions v ON v.concept_id = c.id AND v.version_number = c.current_version
+       ${where}
+       ORDER BY cec.embedding <=> $1::vector
+       LIMIT ${pool}`,
+      params,
+    ));
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+  return aggregateChunkHits(
+    rows.map((r) => ({ id: r.id, similarity: r.similarity, startOffset: r.start_offset })),
+    limit,
   );
-  return rows.sort((a, b) => b.similarity - a.similarity).slice(0, limit);
 }
 
 /** A nearest current chunk for each already-scoped concept.  Ask uses this

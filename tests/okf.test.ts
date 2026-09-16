@@ -44,6 +44,42 @@ describe("okf typeToDir", () => {
   it("routes deprecated concepts under deprecated/", () => {
     expect(typeToDir("Definition", "deprecated")).toBe("deprecated/definitions");
   });
+
+  it("classifies by token, so compound and CJK types still land somewhere sane", () => {
+    // `type` is free-form (any string ≤64 chars, default Note) and arrives from
+    // the web form, the MCP tool and OKF import, so spelling must not decide
+    // the directory: the old substring chain sent "Reference Note" to
+    // references but "参考" and "References" to notes.
+    expect(typeToDir("Technical Note", "stable")).toBe("notes");
+    expect(typeToDir("Reference Note", "stable")).toBe("references");
+    expect(typeToDir("References", "stable")).toBe("references");
+    expect(typeToDir("DEFINITION", "stable")).toBe("definitions");
+    expect(typeToDir("参考", "stable")).toBe("references");
+    expect(typeToDir("参考资料", "stable")).toBe("references");
+    expect(typeToDir("操作步骤", "stable")).toBe("procedures");
+    expect(typeToDir("  ", "stable")).toBe("notes");
+    expect(typeToDir("", "stable")).toBe("notes");
+    expect(typeToDir("Zeppelin", "stable")).toBe("notes");
+  });
+});
+
+describe("okf title heading layout", () => {
+  it("injects the H1 when the stored body has none, and says so", () => {
+    const out = conceptToMarkdown({ ...baseConcept, body_markdown: "正文" });
+    expect(out.content).toContain("title_heading: injected");
+    expect(out.content).toContain("\n---\n\n# Docker 部署笔记\n\n正文\n");
+  });
+
+  it("does not repeat a title the body already carries", () => {
+    const out = conceptToMarkdown({
+      ...baseConcept,
+      body_markdown: "# Docker 部署笔记\n\n正文",
+    });
+    expect(out.content).toContain("title_heading: body");
+    // Exactly one H1 line, and it is the body's own.
+    const headings = out.content.split("\n").filter((l) => l.startsWith("# "));
+    expect(headings).toEqual(["# Docker 部署笔记"]);
+  });
 });
 
 describe("okf determinism", () => {

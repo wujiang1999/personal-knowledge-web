@@ -9,6 +9,14 @@
 
 export const BM25_K1 = 1.2;
 export const BM25_B = 0.75;
+/** Per-field boosts (BM25F). A title hit is a deliberate statement of what the
+ * entry is about; a description hit is a one-line summary the author wrote;
+ * body occurrences are the cheapest signal to acquire and the most common, so
+ * they anchor the scale at 1. Before this the three fields were concatenated
+ * into one bag with a single tf, which scored '检索方案' in a title exactly
+ * like the same word appearing once in a long body — and 0020 had already
+ * removed the tsvector A/B weights that used to carry that distinction. */
+export const FIELD_WEIGHTS = { title: 2, description: 1.25, body: 1 } as const;
 /** 失效内容降权（§3.3.3.2）：deprecated 条目仍可被搜到，但不与有效条目竞争
  * 前排。系数直接乘进 BM25，排序与返回的 score 始终一致。 */
 export const DEPRECATED_FACTOR = 0.25;
@@ -51,16 +59,47 @@ export function tokenizeQuery(needle: string): string[] {
   return terms.slice(0, MAX_QUERY_TERMS);
 }
 
-/** Pure BM25 term contribution (idf × tf normalization). Unit-tested; the
- * SQL in searchConcepts computes exactly this formula inline. */
-export function bm25TermContribution(
-  tf: number,
+/** One field's term frequency and its length, in the same units the SQL's
+ * lateral computes (occurrences of the lower()ed term, char_length). */
+export interface FieldTf {
+  tf: number;
+  len: number;
+}
+
+/** The three indexed fields. `avg` is the corpus-wide mean length of each,
+ * already guarded against zero (an all-NULL description column averages to 0
+ * and would divide by zero without the GREATEST in `stats`). */
+export type FieldBag<T> = { title: T; description: T; body: T };
+
+/** Length-normalized, weight-combined term frequency — BM25F's tf̃.
+ * Each field is normalized against *its own* mean length (a 30-char title is
+ * long for a title; a 30-char body is nothing), then the fields are combined
+ * with their boosts. */
+export function combinedTermFreq(
+  fields: FieldBag<FieldTf>,
+  avg: FieldBag<number>,
+): number {
+  const norm = (len: number, mean: number): number =>
+    1 - BM25_B + BM25_B * (len / Math.max(mean, 1));
+  return (
+    (FIELD_WEIGHTS.title * fields.title.tf) / norm(fields.title.len, avg.title) +
+    (FIELD_WEIGHTS.description * fields.description.tf) /
+      norm(fields.description.len, avg.description) +
+    (FIELD_WEIGHTS.body * fields.body.tf) / norm(fields.body.len, avg.body)
+  );
+}
+
+/** One query term's BM25F contribution: idf × the saturated field-weighted tf.
+ * Unit-tested against pinned literals; the SQL in searchConcepts computes
+ * exactly this formula inline. */
+export function bm25fTermContribution(
+  fields: FieldBag<FieldTf>,
+  avg: FieldBag<number>,
   df: number,
   n: number,
-  docLen: number,
-  avgdl: number
 ): number {
+  const tf = combinedTermFreq(fields, avg);
+  if (tf === 0) return 0;
   const idf = Math.log(1 + (n - df + 0.5) / (df + 0.5));
-  const denom = tf + BM25_K1 * (1 - BM25_B + BM25_B * (docLen / avgdl));
-  return (idf * tf * (BM25_K1 + 1)) / denom;
+  return (idf * tf * (BM25_K1 + 1)) / (BM25_K1 + tf);
 }

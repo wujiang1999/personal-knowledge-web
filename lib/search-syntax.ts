@@ -1,22 +1,29 @@
 /** Obsidian-style search operators parsed out of the free-text query:
- * `tag:llm`, `category:"技术/部署"`, `status:draft`. Operators are stripped
- * from the free-text remainder (BM25 / trgm / embedding see only real
- * words); repeated `tag:` accumulate, one `category:` / `status:` each
- * (last wins). Unknown status values are ignored rather than silently
- * returning zero rows. */
+ * `tag:llm`, `category:"技术/部署"`, `status:draft`, `type:Reference`.
+ * Operators are stripped from the free-text remainder (BM25 / trgm / embedding
+ * see only real words); repeated `tag:` accumulate, one `category:` / `status:`
+ * / `type:` each (last wins). Unknown status values are ignored rather than
+ * silently returning zero rows. */
 export interface ParsedQuery {
   /** Free-text remainder with operators removed (untrimmed caller case). */
   text: string;
   tags: string[];
   category: string | null;
   status: string | null;
+  /** Entry type (`Note`, `Reference`, …). Matched case-insensitively against
+   * the stored value: the type is free-form by contract (≤64 chars, default
+   * `Note`), so unlike `status` there is no enum to validate against. */
+  type: string | null;
 }
 
-const OPERATOR_RE = /(tag|category|status):(?:"([^"]*)"|(\S*))?/g;
+// The lookbehind keeps operator names from matching inside words: without it
+// `hashtag:x` was stripped as a tag filter, and adding `type` would have made
+// `filetype:pdf` a type filter. Operators start a token or follow whitespace.
+const OPERATOR_RE = /(?<![\p{L}\p{N}_])(tag|category|status|type):(?:"([^"]*)"|(\S*))?/gu;
 const STATUSES = new Set(["draft", "stable", "deprecated"]);
 
 export function parseSearchQuery(q: string): ParsedQuery {
-  const parsed: ParsedQuery = { text: q, tags: [], category: null, status: null };
+  const parsed: ParsedQuery = { text: q, tags: [], category: null, status: null, type: null };
   if (!q) return parsed;
   parsed.text = q.replace(OPERATOR_RE, (_m, key: string, quoted: string | undefined, bare: string | undefined) => {
     const value = (quoted ?? bare ?? "").trim();
@@ -24,6 +31,7 @@ export function parseSearchQuery(q: string): ParsedQuery {
     if (key === "tag") parsed.tags.push(value);
     else if (key === "category") parsed.category = value;
     else if (key === "status" && STATUSES.has(value.toLowerCase())) parsed.status = value.toLowerCase();
+    else if (key === "type") parsed.type = value;
     return "";
   });
   return parsed;
@@ -61,6 +69,13 @@ export function operatorFilterClauses(parsed: ParsedQuery, params: unknown[]): s
   if (parsed.status) {
     const idx = (params.push(parsed.status), params.length);
     clauses.push(`c.status = $${idx}`);
+  }
+  if (parsed.type) {
+    // Case-insensitive: `type` is free-form (default "Note"), and historical
+    // rows carry hand-typed variants. `status` keeps exact equality because it
+    // is a validated enum.
+    const idx = (params.push(parsed.type), params.length);
+    clauses.push(`lower(c.type) = lower($${idx}::text)`);
   }
   return clauses;
 }

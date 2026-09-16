@@ -1,5 +1,6 @@
 import { getLlmChatConfig } from "./config";
 import { splitConceptBody } from "./chunks";
+import { headingPathAt } from "./headings";
 import { getBodiesByIds, searchConcepts } from "./concepts";
 import { llmChatJsonWith } from "./llm";
 import { cachedQueryVector, relevantChunksForConcepts } from "./semantic";
@@ -32,6 +33,10 @@ export interface AskSource {
   /** 进 prompt 的正文（从最相关的当前分块取，而非长文开头）。 */
   text: string;
   truncated: boolean;
+  /** 该分块所在的小节路径（lib/headings.ts），如「第4章 > 4.2 检索」。
+   * 让答案的引用能指到小节，而不是一段字符窗口；分块之上的标题不在窗口里，
+   * 所以这里用全文（bodies）解析，而不是取到的那 1800 字。 */
+  section?: string;
   /** 当前正文中的片段偏移；缺省只在 pgvector/分块不可用的降级路径出现。 */
   chunkStart?: number;
   chunkEnd?: number;
@@ -147,6 +152,7 @@ export async function collectSources(user: ScopeUser, question: string, k: numbe
       // A normal chunk is ~1800 chars, within the 2400-char per-source
       // budget. Keep its original offsets so the UI can point to evidence.
       const text = chunk.text.slice(0, ASK_SOURCE_CHARS);
+      const section = headingPathAt(full, chunk.startOffset);
       return {
         id: r.id,
         title: r.title,
@@ -155,12 +161,14 @@ export async function collectSources(user: ScopeUser, question: string, k: numbe
         similarity: r.similarity ?? null,
         text,
         truncated: chunk.startOffset > 0 || chunk.endOffset < full.length || text.length < chunk.text.length,
+        ...(section.length > 0 ? { section: section.join(" > ") } : {}),
         chunkStart: chunk.startOffset,
         chunkEnd: Math.min(chunk.endOffset, chunk.startOffset + text.length),
       };
     }
     const lexicalChunk = selectLexicalChunk(full, question);
     const text = lexicalChunk.text.slice(0, ASK_SOURCE_CHARS);
+    const section = headingPathAt(full, lexicalChunk.startOffset);
     return {
       id: r.id,
       title: r.title,
@@ -169,6 +177,7 @@ export async function collectSources(user: ScopeUser, question: string, k: numbe
       similarity: r.similarity ?? null,
       text,
       truncated: lexicalChunk.startOffset > 0 || lexicalChunk.endOffset < full.length || text.length < lexicalChunk.text.length,
+      ...(section.length > 0 ? { section: section.join(" > ") } : {}),
       chunkStart: lexicalChunk.startOffset,
       chunkEnd: Math.min(lexicalChunk.endOffset, lexicalChunk.startOffset + text.length),
     };
@@ -193,6 +202,7 @@ export function buildAskMessages(
       source: i + 1,
       title: s.title,
       category: s.category,
+      section: s.section ?? null,
       text: s.text,
       chunkStart: s.chunkStart,
       chunkEnd: s.chunkEnd,

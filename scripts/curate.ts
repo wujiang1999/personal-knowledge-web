@@ -1,6 +1,7 @@
 import { loadEnv } from "./load-env";
 import { closePool, query } from "../lib/db";
 import { MIN_MENTION_TITLE_CHARS, findUnlinkedMentionOffset, parseWikiLinks } from "../lib/links";
+import { opensWithTitleHeading } from "../lib/headings";
 
 loadEnv();
 
@@ -18,6 +19,7 @@ loadEnv();
  *   4. 长期未更新 — no update within the staleness window
  *   5. 未链接提及 — a body mentions another entry's title as plain text
  *      without [[linking]] it (Obsidian "unlinked mentions", deterministic)
+ *   6. 标题重复 — the body opens with an H1 that repeats the title
  */
 interface Row {
   id: string;
@@ -114,6 +116,15 @@ async function main() {
     console.log(`   - ${fmt(u.from.id, u.from.title)} 提到「${u.target.title}」`);
   }
   if (unlinked.length > 50) console.log(`   …及其余 ${unlinked.length - 50} 处`);
+
+  // 6. Bodies that open with an H1 repeating the title. Every surface renders
+  // the title itself (detail page header, exported `# title` wrapper), so this
+  // shows up as the same heading twice; the export works around it, but the
+  // stored body is where it should go away.
+  const repeatedTitle = rows.filter((r) => opensWithTitleHeading(r.body_markdown, r.title));
+  console.log(`\n6. 正文首行 H1 与标题重复：${repeatedTitle.length} 条`);
+  for (const r of repeatedTitle.slice(0, 50)) console.log(`   - ${fmt(r.id, r.title)}`);
+  if (repeatedTitle.length > 50) console.log(`   …及其余 ${repeatedTitle.length - 50} 条`);
 
   await closePool();
 }

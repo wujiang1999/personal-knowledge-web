@@ -179,7 +179,10 @@ sudo systemctl list-timers | grep backup                      # 查看下次备�
 │   └── <slug>-<id8>.md   # 每个概念一个文件
 └── deprecated/...        # status=deprecated 的概念
 ```
-每个概念文件带 YAML frontmatter，`type` 必填，并含 `status`、`generated`（`at` 取自当前版本创建时间，不受元数据-only 编辑影响）、自定义 `kb` 字段（id/version/language/content_hash/sensitivity）。
+每个概念文件带 YAML frontmatter，`type` 必填，并含 `status`、`generated`（`at` 取自当前版本创建时间，不受元数据-only 编辑影响）、自定义 `kb` 字段（id/version/language/content_hash/sensitivity/title_heading）。
+
+- `type` 是自由字符串（默认 `Note`，上限 64 字），目录归属按**词元**判定并带别名（`Reference`/`References`/`参考` → `references`，`操作步骤` → `procedures`），无法识别时落 `notes`；不会因为大小写或语言差异散落到不同目录。
+- 文件里只有一个一级标题：正文自身若已以 `# {title}` 开头，导出器不再追加包装，并在 `kb.title_heading` 记为 `body`；否则追加并记为 `injected`。导入端只读这一个 `kb.*` 键——它决定要不要剥掉包装，从而保证「导出→导入」逐字节还原正文。
 
 ## 后续能力
 

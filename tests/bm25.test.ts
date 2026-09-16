@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEPRECATED_FACTOR, MAX_QUERY_TERMS, bm25TermContribution, tokenizeQuery } from "../lib/bm25";
+import { DEPRECATED_FACTOR, MAX_QUERY_TERMS, bm25fTermContribution, tokenizeQuery } from "../lib/bm25";
 
 describe("tokenizeQuery", () => {
   it("splits mixed CJK+ASCII needles into words and bigrams", () => {
@@ -57,53 +57,95 @@ describe("tokenizeQuery", () => {
   });
 });
 
-describe("bm25TermContribution", () => {
+describe("bm25fTermContribution", () => {
   const n = 100;
-  const avgdl = 1000;
+  const df = 10;
+  const avg = { title: 20, description: 40, body: 1000 };
+  const bag = (
+    title: number,
+    description: number,
+    body: number,
+    lens: { title: number; description: number; body: number } = { title: 20, description: 40, body: 1000 },
+  ) => ({
+    title: { tf: title, len: lens.title },
+    description: { tf: description, len: lens.description },
+    body: { tf: body, len: lens.body },
+  });
 
-  it("is zero for a missing term", () => {
-    expect(bm25TermContribution(0, 10, n, avgdl, avgdl)).toBe(0);
+  it("is zero for a term missing from every field", () => {
+    expect(bm25fTermContribution(bag(0, 0, 0), avg, df, n)).toBe(0);
   });
 
   it("rises with tf but saturates (k1 normalization)", () => {
-    const at1 = bm25TermContribution(1, 10, n, avgdl, avgdl);
-    const at5 = bm25TermContribution(5, 10, n, avgdl, avgdl);
-    const at50 = bm25TermContribution(50, 10, n, avgdl, avgdl);
-    expect(at5).toBeGreaterThan(at1);
-    expect(at50).toBeGreaterThan(at5);
-    // Saturation: 10x tf multiplies the score well below 10x.
-    expect(at50 / at5).toBeLessThan(10);
+    const at1 = bm25fTermContribution(bag(0, 0, 1), avg, df, n);
+    const at3 = bm25fTermContribution(bag(0, 0, 3), avg, df, n);
+    const at30 = bm25fTermContribution(bag(0, 0, 30), avg, df, n);
+    expect(at3).toBeGreaterThan(at1);
+    expect(at30).toBeGreaterThan(at3);
+    expect(at30 / at3).toBeLessThan(10);
   });
 
-  it("penalizes documents longer than the average", () => {
-    const short = bm25TermContribution(3, 10, n, avgdl, avgdl);
-    const long = bm25TermContribution(3, 10, n, avgdl * 4, avgdl);
+  it("scores a title hit above the same tf in description or body", () => {
+    const title = bm25fTermContribution(bag(1, 0, 0), avg, df, n);
+    const description = bm25fTermContribution(bag(0, 1, 0), avg, df, n);
+    const body = bm25fTermContribution(bag(0, 0, 1), avg, df, n);
+    expect(title).toBeGreaterThan(description);
+    expect(description).toBeGreaterThan(body);
+  });
+
+  it("adds fields: a title hit plus a body hit equals the weighted sum of tfs", () => {
+    // weight(title)=2, weight(body)=1, both at their average length → tf̃ = 3,
+    // the same combined frequency as three body occurrences.
+    const both = bm25fTermContribution(bag(1, 0, 1), avg, df, n);
+    const bodyThree = bm25fTermContribution(bag(0, 0, 3), avg, df, n);
+    expect(both).toBeCloseTo(bodyThree, 12);
+  });
+
+  it("penalizes a document whose matching field is longer than average", () => {
+    const short = bm25fTermContribution(bag(0, 0, 3), avg, df, n);
+    const long = bm25fTermContribution(bag(0, 0, 3, { title: 20, description: 40, body: 2000 }), avg, df, n);
     expect(long).toBeLessThan(short);
   });
 
+  it("normalizes each field against its own mean, not the document's", () => {
+    // A long title is diluted even when the body is average-length: the title
+    // norm uses avg.title, so a 60-char title costs 3x the norm of a 20-char one.
+    const shortTitle = bm25fTermContribution(bag(1, 0, 0), avg, df, n);
+    const longTitle = bm25fTermContribution(bag(1, 0, 0, { title: 60, description: 40, body: 1000 }), avg, df, n);
+    expect(longTitle).toBeLessThan(shortTitle);
+  });
+
   it("scores rare terms (low df) higher than common ones", () => {
-    const rare = bm25TermContribution(2, 1, n, avgdl, avgdl);
-    const common = bm25TermContribution(2, 90, n, avgdl, avgdl);
+    const rare = bm25fTermContribution(bag(0, 0, 1), avg, 1, n);
+    const common = bm25fTermContribution(bag(0, 0, 1), avg, 90, n);
     expect(rare).toBeGreaterThan(common);
   });
 
-  it("matches the BM25 values the SQL computes", () => {
+  it("does not divide by zero when a whole field is empty", () => {
+    // Every description NULL in the corpus → stats' GREATEST(avg, 1) is what
+    // keeps the SQL finite; the reference implementation guards identically.
+    const value = bm25fTermContribution(bag(0, 1, 1), { title: 20, description: 0, body: 1000 }, df, n);
+    expect(Number.isFinite(value)).toBe(true);
+    expect(value).toBeGreaterThan(0);
+  });
+
+  it("matches the BM25F values the SQL computes", () => {
     // Pinned as literal numbers, not as a restatement of the formula with the
-    // same exported constants — the previous version recomputed the
-    // implementation inside the assertion, so it could only catch a change
-    // that the test's own copy of the formula also happened to miss.
-    // Reference points (idf = ln(1 + (n − df + 0.5)/(df + 0.5)), k1 = 1.2,
-    // b = 0.75, n = 100, avgdl = 1000). Signature is
-    // bm25TermContribution(tf, df, n, docLen, avgdl).
-    //   tf=1 df=50 docLen=avgdl → at docLen == avgdl the length-normalization
-    //   term collapses to 1, so the value is idf = ln 2 exactly.
-    expect(bm25TermContribution(1, n / 2, n, avgdl, avgdl)).toBeCloseTo(0.6931471805599453, 12);
-    expect(bm25TermContribution(3, 10, n, 500, avgdl)).toBeCloseTo(3.984191657033, 12);
-    expect(bm25TermContribution(1, 90, n, 4000, avgdl)).toBeCloseTo(0.049284788877, 12);
+    // same exported constants — recomputing the implementation inside the
+    // assertion can only catch a change the test's own copy also missed.
+    // n = 100, df = 10, k1 = 1.2, b = 0.75,
+    // weights title 2 / description 1.25 / body 1,
+    // averages title 20 / description 40 / body 1000.
+    expect(bm25fTermContribution(bag(1, 0, 0), avg, df, n)).toBeCloseTo(3.112649732057, 12);
+    expect(bm25fTermContribution(bag(0, 1, 0), avg, df, n)).toBeCloseTo(2.540938556781, 12);
+    expect(bm25fTermContribution(bag(0, 0, 1), avg, df, n)).toBeCloseTo(2.263745259678, 12);
+    expect(bm25fTermContribution(bag(0, 0, 3), avg, df, n)).toBeCloseTo(3.557313979494, 12);
+    expect(bm25fTermContribution(bag(0, 0, 1), avg, 90, n)).toBeCloseTo(0.109770666135, 12);
+    expect(bm25fTermContribution(bag(2, 1, 4), avg, 1, n)).toBeCloseTo(8.19775000648, 12);
   });
 
   it("deprecated factor scales the score without zeroing it", () => {
-    const raw = bm25TermContribution(2, 10, n, avgdl, avgdl);
+    const raw = bm25fTermContribution(bag(0, 0, 2), avg, df, n);
     expect(raw * DEPRECATED_FACTOR).toBeGreaterThan(0);
     expect(raw * DEPRECATED_FACTOR).toBeLessThan(raw);
   });

@@ -8,6 +8,7 @@ describe("parseSearchQuery", () => {
       tags: [],
       category: null,
       status: null,
+      type: null,
     });
   });
 
@@ -17,6 +18,7 @@ describe("parseSearchQuery", () => {
     expect(p.tags).toEqual(["pg"]);
     expect(p.status).toBe("draft");
     expect(p.category).toBeNull();
+    expect(p.type).toBeNull();
   });
 
   it("supports quoted values for paths with spaces or slashes", () => {
@@ -30,20 +32,43 @@ describe("parseSearchQuery", () => {
     expect(parseSearchQuery("tag:a tag:b word").tags).toEqual(["a", "b"]);
   });
 
+  it("parses the type operator, keeping the raw value for a case-insensitive match", () => {
+    expect(parseSearchQuery("检索 type:Reference").type).toBe("Reference");
+    expect(parseSearchQuery("检索 type:参考").type).toBe("参考");
+    expect(parseSearchQuery('type:"Reference Note"').type).toBe("Reference Note");
+  });
+
+  it("keeps one type operator, last one wins", () => {
+    expect(parseSearchQuery("type:Note type:Procedure").type).toBe("Procedure");
+  });
+
   it("ignores unknown status values instead of emptying results", () => {
     expect(parseSearchQuery("x status:archived").status).toBeNull();
     expect(parseSearchQuery("x status:draft").status).toBe("draft");
   });
 
   it("drops malformed operators with empty values", () => {
-    const p = parseSearchQuery("word tag: category:");
-    expect(p.text).toBe("word  ");
+    const p = parseSearchQuery("word tag: category: type:");
+    expect(p.text).toBe("word   ");
     expect(p.tags).toEqual([]);
+    expect(p.type).toBeNull();
+  });
+
+  it("only treats an operator name as an operator at a word boundary", () => {
+    // "hashtag:x" was stripped as a tag filter, and a bare `type:` alternation
+    // would have done the same to "filetype:pdf" — a plausible thing to search.
+    const p = parseSearchQuery("hashtag:x filetype:pdf 检索");
+    expect(p.text).toBe("hashtag:x filetype:pdf 检索");
+    expect(p.tags).toEqual([]);
+    expect(p.type).toBeNull();
   });
 
   it("handles operators-only queries (filter listing)", () => {
     const p = parseSearchQuery("status:draft");
     expect(p.text).toBe("");
     expect(p.status).toBe("draft");
+    const t = parseSearchQuery("type:Reference");
+    expect(t.text).toBe("");
+    expect(t.type).toBe("Reference");
   });
 });

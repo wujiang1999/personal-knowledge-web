@@ -10,9 +10,15 @@ import {
   rerankWithSemantic,
   semanticCandidates,
 } from "./semantic";
-import { BM25_B, BM25_K1, DEPRECATED_FACTOR, tokenizeQuery } from "./bm25";
+import { BM25_B, BM25_K1, DEPRECATED_FACTOR, FIELD_WEIGHTS, tokenizeQuery } from "./bm25";
+import { headingPathAt } from "./headings";
 import { logRetrievalHits, logSearch, logWhereClause, type LogFilter } from "./logs";
-import { escapeLike, operatorFilterClauses, parseSearchQuery } from "./search-syntax";
+import {
+  escapeLike,
+  operatorFilterClauses,
+  parseSearchQuery,
+  type ParsedQuery,
+} from "./search-syntax";
 import {
   MIN_MENTION_TITLE_CHARS,
   escapeRegExp,
@@ -468,6 +474,13 @@ export interface SearchResult extends Concept {
    * scale-independent relatedness signal since fused scores aren't comparable
    * across lexical and semantic-only rows. */
   similarity?: number;
+  /** Heading path of the matched region, e.g. "第4章 > 4.2 检索". Present only
+   * when the hit sits under at least one ATX heading (lib/headings.ts) — it
+   * lets a caller cite a section instead of a character window. */
+  section?: string;
+  /** Internal match anchor (char offset of the preview window) used to derive
+   * `section`; never shipped to a client. */
+  match_at?: number;
 }
 
 // Repeat searches (UI resubmits, MCP agent loops, back-navigation re-renders)
@@ -483,6 +496,37 @@ export function invalidateSearchCache(): void {
   searchCache.clear();
 }
 
+/** Attach `section` to finished results and strip the internal match anchor.
+ *
+ * Exported for the contract it enforces, not as plumbing: (1) `match_at` is an
+ * implementation detail of the SQL preview window and must never reach a client,
+ * (2) `section` is present only when the hit sits under a heading, so callers
+ * must treat it as optional, and (3) a row whose body is missing from `bodies`
+ * (deleted or moved out of scope between the two reads) loses the field instead
+ * of failing the search.
+ *
+ * Rows without an anchor — the operator-only listing path, which matched on
+ * metadata rather than text — get no section at all: there is no matched region
+ * to name.
+ *
+ * Offsets arrive from two sources with different ideas of "offset":
+ * Postgres `position()` counts characters, chunk offsets count UTF-16 code
+ * units. They agree unless astral characters precede the anchor, in which case
+ * the label can point one heading early — cosmetic, and cheaper than shipping a
+ * byte-exact offset for a label. */
+export function attachSections(
+  results: SearchResult[],
+  bodies: Map<string, string>,
+): SearchResult[] {
+  return results.map((r) => {
+    const { match_at: anchor, ...rest } = r;
+    if (anchor === undefined) return rest;
+    const body = bodies.get(r.id);
+    const path = body ? headingPathAt(body, anchor) : [];
+    return path.length > 0 ? { ...rest, section: path.join(" > ") } : rest;
+  });
+}
+
 export async function searchConcepts(
   user: ScopeUser,
   q: string,
@@ -496,12 +540,12 @@ export async function searchConcepts(
   // when every stage failed). Cache hits skip logging entirely — the same
   // query was logged at most SEARCH_CACHE_TTL ago.
   let mode = "none";
-  // Operators (tag:/category:/status:) are stripped from the matching text;
-  // the RAW query keys the cache and rides search_logs verbatim.
+  // Operators (tag:/category:/status:/type:) are stripped from the matching
+  // text; the RAW query keys the cache and rides search_logs verbatim.
   const parsed = parseSearchQuery(q);
   const rawKey = q.trim().slice(0, 200);
   const needle = parsed.text.replace(/\s+/g, " ").trim().slice(0, 200);
-  if (!needle && parsed.tags.length === 0 && !parsed.category && !parsed.status) {
+  if (!needle && parsed.tags.length === 0 && !parsed.category && !parsed.status && !parsed.type) {
     return { results: [], total: 0 };
   }
 
@@ -546,7 +590,11 @@ export async function searchConcepts(
     : "c.owner_id = $1";
   const filterClauses = operatorFilterClauses(parsed, params);
   const filterSql = filterClauses.length ? " AND " + filterClauses.join(" AND ") : "";
-  const filterShape = `${parsed.tags.length ? "T" : ""}${parsed.category ? "C" : ""}${parsed.status ? "S" : ""}`;
+  // Clause PRESENCE (never the values) is encoded in the prepared-statement
+  // name, so each shape parses and plans once per pooled connection.
+  const filterShape = `${parsed.tags.length ? "T" : ""}${parsed.category ? "C" : ""}${
+    parsed.status ? "S" : ""
+  }${parsed.type ? "Y" : ""}`;
 
   const sql = `
     WITH corpus AS MATERIALIZED (
@@ -555,8 +603,9 @@ export async function searchConcepts(
              ou.username AS owner_username,
              (SELECT count(*) FROM attachments a WHERE a.concept_id = c.id)::int AS attachment_count,
              v.body_markdown,
-             (char_length(c.title) + char_length(COALESCE(c.description, ''))
-               + char_length(v.body_markdown))::real AS doc_len
+             char_length(c.title)::real AS len_title,
+             char_length(COALESCE(c.description, ''))::real AS len_desc,
+             char_length(v.body_markdown)::real AS len_body
       FROM concepts c
       LEFT JOIN users ou ON ou.id = c.owner_id
       JOIN concept_versions v
@@ -573,24 +622,46 @@ export async function searchConcepts(
          OR position(t.term IN lower(corpus.body_markdown)) > 0
       GROUP BY t.term
     ),
+    -- Per-field mean lengths: BM25F normalizes each field against its own
+    -- average, not against the whole document. GREATEST(…, 1) keeps an
+    -- all-empty field (no descriptions in the corpus at all) from dividing by
+    -- zero, mirroring the Math.max(mean, 1) in lib/bm25.ts.
+    stats AS (
+      SELECT count(*)::real AS n,
+             GREATEST(avg(len_title), 1)::real AS avg_title,
+             GREATEST(avg(len_desc), 1)::real AS avg_desc,
+             GREATEST(avg(len_body), 1)::real AS avg_body
+      FROM corpus
+    ),
     scored AS (
       SELECT c.*,
+        -- BM25F = idf × saturated(Σ_field weight_field · tf_field / (1 − b + b·len_field/avg_field)).
+        -- Before this the three fields shared one bag and one tf, so a title
+        -- hit scored exactly like a single stray body occurrence.
         (SELECT COALESCE(sum(
            ln(1 + (s.n - d.df + 0.5) / (d.df + 0.5))
-           * tfx.tf * (${BM25_K1} + 1)
-           / (tfx.tf + ${BM25_K1} * (1 - ${BM25_B} + ${BM25_B} * c.doc_len / s.avgdl))
+           * tfx.tilde * (${BM25_K1} + 1)
+           / (${BM25_K1} + tfx.tilde)
          ), 0)
          FROM unnest($2::text[]) AS t(term)
          JOIN df d ON d.term = t.term
          CROSS JOIN LATERAL (
-           SELECT GREATEST(
-             (char_length(c.title) - char_length(replace(lower(c.title), t.term, '')))
-           + (char_length(COALESCE(c.description, ''))
-               - char_length(replace(lower(COALESCE(c.description, '')), t.term, '')))
-           + (char_length(c.body_markdown) - char_length(replace(lower(c.body_markdown), t.term, '')))
-           , 0)::real / GREATEST(char_length(t.term), 1) AS tf
+           SELECT
+               ${FIELD_WEIGHTS.title} * GREATEST(char_length(c.title)
+                 - char_length(replace(lower(c.title), t.term, '')), 0)::real
+                 / GREATEST(char_length(t.term), 1)
+                 / (1 - ${BM25_B} + ${BM25_B} * c.len_title / s.avg_title)
+             + ${FIELD_WEIGHTS.description} * GREATEST(char_length(COALESCE(c.description, ''))
+                 - char_length(replace(lower(COALESCE(c.description, '')), t.term, '')), 0)::real
+                 / GREATEST(char_length(t.term), 1)
+                 / (1 - ${BM25_B} + ${BM25_B} * c.len_desc / s.avg_desc)
+             + ${FIELD_WEIGHTS.body} * GREATEST(char_length(c.body_markdown)
+                 - char_length(replace(lower(c.body_markdown), t.term, '')), 0)::real
+                 / GREATEST(char_length(t.term), 1)
+                 / (1 - ${BM25_B} + ${BM25_B} * c.len_body / s.avg_body)
+             AS tilde
          ) tfx
-         CROSS JOIN (SELECT count(*)::real AS n, COALESCE(avg(doc_len), 1)::real AS avgdl FROM corpus) s
+         CROSS JOIN stats s
         ) AS bm25
       FROM corpus c
     )
@@ -604,6 +675,10 @@ export async function searchConcepts(
            substring(
              body_markdown from greatest(1, position(lower($3) in lower(body_markdown)) - 120) for 500
            ) AS body_markdown,
+           -- Same anchor, as an offset: the caller resolves the nearest
+           -- heading above it into the result's section (lib/headings.ts)
+           -- and strips this field before the response leaves the server.
+           greatest(1, position(lower($3) in lower(body_markdown)) - 120) AS match_at,
            -- Total match count for pagination (evaluated over the full window).
            count(*) over () AS total_count,
            -- 失效内容降权(§3.3.3.2): deprecated stays findable but is scaled
@@ -702,7 +777,7 @@ export async function searchConcepts(
   // those. Page-1-only — this degenerate window has no pagination count.
   if (lexicalResults.length === 0 && needle.length >= 3) {
     try {
-      lexicalResults = await searchTrgmFuzzy(user, needle, limit);
+      lexicalResults = await searchTrgmFuzzy(user, needle, limit, parsed);
       total = lexicalResults.length;
       mode = "trgm-fallback";
     } catch (err) {
@@ -739,11 +814,13 @@ export async function searchConcepts(
         // the raw similarity also rides on the row for downstream judges.
         const order = new Map(ids.map((id, i) => [id, i]));
         const simById = new Map(semCands.map((c) => [c.id, c.similarity]));
+        const atById = new Map(semCands.map((c) => [c.id, c.startOffset]));
         semRows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
         results = semRows.map((r, i) => ({
           ...r,
           score: Math.max(1, 100 - i * 5),
           similarity: simById.get(r.id),
+          match_at: atById.get(r.id),
         }));
         // count(*) over() reported 0 for the empty window; the semantic list
         // is the honest match count for this (page-1-only) path.
@@ -769,6 +846,23 @@ export async function searchConcepts(
     deduped.push(r);
   }
   results = deduped;
+
+  // Section labels come from the full bodies (the preview window cannot see the
+  // headings above it). One extra read for at most `limit` current versions,
+  // and only when something actually matched text — the operator-only listing
+  // path has no anchor and would otherwise label every row with its first
+  // heading. Doing this in SQL instead would need a fence-aware markdown scan
+  // that regexp cannot express, and would disagree with lib/headings.ts, which
+  // ask uses on the same bodies.
+  if (results.some((r) => r.match_at !== undefined)) {
+    const bodies = await getBodiesByIds(
+      user,
+      results.map((r) => r.id),
+    );
+    results = attachSections(results, bodies);
+  } else {
+    results = attachSections(results, new Map());
+  }
   // Per-entry retrieval counter (ui|api only — the ingest dedup probe must
   // not inflate the curation signal; cache hits never reach this line).
   // Feeds /stats hot entries + the never-retrieved report. Fire-and-forget.
@@ -797,18 +891,27 @@ export async function searchConcepts(
 /** Trigram fuzzy fallback for the empty BM25 window (typos, near-miss
  * strings). pg_trgm needs >=3 chars to form trigrams; callers gate on that.
  * Scores are similarity-weighted heuristics, deprecated entries scaled down
- * by the same factor as the BM25 path. */
+ * by the same factor as the BM25 path. Operator filters ride along like every
+ * other path: without them a typo'd query would leak entries that the
+ * explicit `tag:`/`category:`/`status:`/`type:` scope had excluded (the
+ * fallback used to ignore them entirely). */
 async function searchTrgmFuzzy(
   user: ScopeUser,
   needle: string,
   limit: number,
+  parsed: ParsedQuery,
 ): Promise<SearchResult[]> {
+  const isAdmin = user.role === "admin";
   // $1 = ownerId, $2 = needle, $3 = limit; role appended last for admin.
   const params: unknown[] = [user.id, needle, limit];
-  const ownerClause =
-    user.role === "admin"
-      ? `($${(params.push(user.role), params.length)}::text = 'admin' OR c.owner_id = $1)`
-      : "c.owner_id = $1";
+  const ownerClause = isAdmin
+    ? `($${(params.push(user.role), params.length)}::text = 'admin' OR c.owner_id = $1)`
+    : "c.owner_id = $1";
+  const filterClauses = operatorFilterClauses(parsed, params);
+  const filterSql = filterClauses.length ? " AND " + filterClauses.join(" AND ") : "";
+  const filterShape = `${parsed.tags.length ? "T" : ""}${parsed.category ? "C" : ""}${
+    parsed.status ? "S" : ""
+  }${parsed.type ? "Y" : ""}`;
   const sql = `
     SELECT c.id, c.type, c.title, c.description, c.status, c.tags,
            c.current_version, c.created_at, c.updated_at,
@@ -827,7 +930,7 @@ async function searchTrgmFuzzy(
     JOIN concept_versions v
       ON v.concept_id = c.id AND v.version_number = c.current_version
     WHERE c.deleted_at IS NULL
-      AND ${ownerClause}
+      AND ${ownerClause}${filterSql}
       AND (c.title % $2 OR v.body_markdown % $2 OR v.body_markdown %> $2)
     ORDER BY score DESC, c.updated_at DESC
     LIMIT $3
@@ -840,7 +943,9 @@ async function searchTrgmFuzzy(
     await client.query("SET LOCAL pg_trgm.similarity_threshold = 0.1");
     await client.query("SET LOCAL pg_trgm.word_similarity_threshold = 0.4");
     const { rows } = await client.query<SearchResult>({
-      name: "search_trgm_v1",
+      // Shape (scope × filter presence) in the name, values in the parameters:
+      // same plan-reuse contract as the BM25 statement.
+      name: `search_trgm_v2_${isAdmin ? "admin" : "user"}_${filterShape || "plain"}`,
       text: sql,
       values: params as never[],
     });

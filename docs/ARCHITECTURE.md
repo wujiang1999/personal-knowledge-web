@@ -87,31 +87,50 @@ MCP 客户端（Claude/Codex，personal-wiki）──Bearer pkb_…──► htt
 
 ## 四、检索管线（`lib/concepts.ts:searchConcepts`）
 
-BM25 + embedding 混合，五级降级链，任何一级失败都退化而不是报错：
+BM25F + embedding 混合，五级降级链，任何一级失败都退化而不是报错：
 
 ```
 查询 q
- ├─ parseSearchQuery（lib/search-syntax）：剥离 tag:/category:"…"/status: 算子
+ ├─ parseSearchQuery（lib/search-syntax）：剥离 tag:/category:"…"/status:/type: 算子
+ │     （算子名要求词边界：hashtag:x / filetype:pdf 不会被误当算子）
  ├─ TTL 结果缓存（默认 60s / 200 条，任意写操作整体清空；命中不落日志）
- ├─ ① BM25（单条 SQL，词法）：tokenizeQuery = ASCII 整词 + CJK bigram
+ ├─ ① BM25F（单条 SQL，词法）：tokenizeQuery = ASCII 整词 + CJK bigram
  │     （≤24 词项，单数组参数 → 语句文本与词数无关）；df/tf 共用 lower()
- │     子串定义；k1=1.2 b=0.75；deprecated ×0.25 原位降权
+ │     子串定义；k1=1.2 b=0.75；字段权重 title 2 / description 1.25 / body 1，
+ │     每个字段按自身均长归一（stats CTE，GREATEST(avg,1) 防零除）；
+ │     deprecated ×0.25 原位降权
  │     ── 与 query embedding HTTP 调用【并行】发起（省 300–700ms 跨境往返）
  ├─ ② 算子-only 查询 → 作用域内列表（独立参数数组 + 独立语句名）
- ├─ ③ 空窗口且 needle ≥3 字 → pg_trgm 模糊兜底（错字/近miss）
- ├─ ④ 词法有结果 → rerankWithSemantic：pgvector 近邻 × 词法窗口 RRF 融合（k=60）
+ ├─ ③ 空窗口且 needle ≥3 字 → pg_trgm 模糊兜底（错字/近miss，同样吃算子过滤）
+ ├─ ④ 词法有结果 → rerankWithSemantic：chunk 级 HNSW 召回 × 词法窗口 RRF 融合（k=60）
  ├─ ⑤ 词法为空且有向量 → semantic-only 纯语义召回（合成降序分，仅首页）
- └─ 按 id 去重 top-k 输出 + 每条带 match 锚定的 500 字预览窗口
+ └─ 按 id 去重 top-k → 补 section（章节路径）→ 每条带 match 锚定的 500 字预览窗口
 ```
 
-- **作用域一致性**：tag/category/status 算子同时下推到词法与向量召回
-  （`semanticCandidates`/`rerankWithSemantic` 都收 `ParsedQuery`），修复过向量召回绕过 category 过滤的泄漏。
+- **BM25F（字段加权 + 逐字段长度归一）**：2026-09-16 前的版本把 title/description/body
+  拼成一个 bag 用同一个 tf 打分，标题命中与正文里偶然出现一次同权 —— 那是 0020 删掉
+  tsvector `setweight A/B` 之后留下的真空。现在 `tf̃ = Σ_field w_field · tf_field /
+  (1 − b + b·len_field/avg_field)`，再用 `idf · tf̃(k1+1)/(k1+tf̃)` 饱和。参考实现
+  `lib/bm25.ts:bm25fTermContribution` 与 SQL 内联公式逐项对应（测试钉死字面量数值）。
+  **代价**：分数尺度整体上移（标题命中最多约 2×），依赖词法分的阈值需重新标定 ——
+  `ASK_MIN_SCORE`（ask/claims 的纯词法门槛）与 ingest 查重的 `score ≥ 25` 都是旧尺度标定值。
+- **结果字段**：`score`（BM25F 尺度）/ `similarity`（语义路径，0–1）/ `section`（命中处的
+  标题路径，如「第4章 > 4.2 检索」，由 `lib/headings.ts` 在全文上解析，忽略围栏代码里的
+  `# 注释`）。`match_at` 是内部锚点，出响应前剥掉。
+- **语义召回是 chunk 级的**：先用 HNSW 取 top-N chunk 池（`max(3·limit, 60)`，
+  并 `SET LOCAL hnsw.ef_search` 抬高到不低于池大小），再按 concept 折叠取最近一块
+  （`aggregateChunkHits`；同分时块命中多的在前）。替换了旧的
+  `DISTINCT ON (concept_id) … ORDER BY concept_id, distance` —— 那条语句用不上向量索引，
+  每次检索都要扫遍作用域内全部 chunk 再在 JS 里排序。
+- **作用域一致性**：tag/category/status/type 算子同时下推到词法、trgm 兜底与向量召回
+  （都收 `ParsedQuery`）；trgm 兜底此前完全忽略算子（一次真实泄漏修复）。
 - **归因与观测**：每次真实检索落 `search_logs`（source=ui|api|ingest、mode、耗时）；
   ui|api 命中批量 `+1` 条目 `retrieval_count`（ingest 查重探测与缓存命中都不计）。
-- **计划缓存**：BM25/算子/过滤各形态用具名 prepared statement（scope × filterShape 编码进
-  语句名），每连接 parse+plan 一次；实测多引擎 SQL 冷启动 plan ~65ms 被消掉。
-- **相似度信号**：语义路径的结果行携带 `similarity`（1 − cosine 距离），供 MCP 写路径
-  判别降级用（阈值 0.55，2026-09-08 决策冻结不动）。
+- **计划缓存**：BM25/算子/trgm 各形态用具名 prepared statement（scope × filterShape 编码进
+  语句名，语句名带版本后缀以便改语句时自然换名），每连接 parse+plan 一次。
+- **相似度信号的消费者**：`semanticCandidates` 返回的 `similarity`（1 − cosine 距离）供
+  ask/claims 的弱候选门槛与写路径判别使用；MCP 写路径判别自 2026-09-10 起在服务端
+  （`lib/judge.ts`）只做分类，历史文档里的「相似度 ≥0.55 / 词法分 ≥60」规则已不再存在于代码中。
 - `hasSemanticSearch` 探测按进程缓存（pgvector 扩展 + `concept_embeddings` 表 + embedding 配置三条件），
   装扩展/配 key 后必须重启服务才生效。
 
@@ -189,7 +208,7 @@ BM25 + embedding 混合，五级降级链，任何一级失败都退化而不是
 |---|---|---|
 | `auto-summary` | 创建/新版本且 description 为空 | fire-and-forget；`maxTokens:200`、thinking 默认关（0.18s vs 16.4s 实测）；绝不覆盖人工描述 |
 | `search-embed` | 每次检索（与 BM25 并行） | 输入截 4000 字；失败 → 纯词法 |
-| `ingest-atomize` | `npm run ingest -- file.md [--write]` | 标题面包屑分块（≤2800 字符）→ LLM 原子化 → 查重（score≥25 或标题全同跳过）→ `generated_by=llm:ingest:<model>`；块级并发池 `INGEST_CONCURRENCY` 默认 4 |
+| `ingest-atomize` | `npm run ingest -- file.md [--write]` | 标题面包屑分块（≤2800 字符）→ LLM 原子化 → 查重（score≥25 或标题全同跳过；该阈值按 BM25F 前的词法尺度标定，2026-09-16 字段加权后需重标）→ `generated_by=llm:ingest:<model>`；块级并发池 `INGEST_CONCURRENCY` 默认 4 |
 | `claims` | `npm run claims [--write]` | 主张抽取 + 矛盾判定（每条主张 1 次判定调用，无相关候选则跳过）；`--write` 时把矛盾作为 conflict 入审核队列，dry-run 只出报告 |
 | `weekly-review` | `npm run review [--write]` | 近 N 天变更分组 + LLM 叙事 → 「每周回顾」条目（重跑出新版本） |
 | `resummarize` | `/settings`「维护」按钮（`POST /api/tasks`） | 批量补齐缺描述的条目：复用 `auto-summary` 的提示与写入路径（`purpose=auto-summary`），每条落一次进度；人工描述不覆盖、上限 50 条/次 |
