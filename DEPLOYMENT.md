@@ -18,15 +18,15 @@
 
 ## 目录映射
 
-| 本地（E:\TXY\deployment\sjtuai.art\） | 服务器 | 说明 |
+| 本地（相对于 `deployment/sjtuai.art/`） | 服务器 | 说明 |
 |---|---|---|
 | 项目全部源码（`app/`、`lib/`、`db/` 等） | `/opt/personal-knowledge-web` | 经审核的 git bundle 更新服务器检出 |
 | `deploy.sh`（项目根自带） | 同名文件 | **服务器端**部署脚本，以 root 运行 |
-| `Caddyfile` | `/etc/caddy/Caddyfile` | 线上 Caddy 配置的**权威快照**，改动后须双向同步 |
+| `Caddyfile` | `/etc/caddy/Caddyfile` | Caddy 配置快照，可能落后于线上；变更前先比对实际配置 |
 | `server/` | 各自路径 | 服务器侧配置纳管：`backup.sh`(→/usr/local/sbin/personal-knowledge-web-backup)、`restore-drill.sh`(→/usr/local/sbin/personal-knowledge-web-restore-drill)、`kb-notify.sh`(→/usr/local/sbin/kb-notify)、`fail2ban-jail.local`(→/etc/fail2ban/jail.local)、`*.service`/`*.timer`(→/etc/systemd/system，见下)、`systemd-drops/*.conf`(OnFailure 告警 drop-in) |
-| ↳ `server/personal-knowledge-web.service` | `/etc/systemd/system/` | 主应用单元（监听 127.0.0.1:3000） |
+| ↳ `server/personal-knowledge-web.service` | `/etc/systemd/system/` | 主应用重建模板；安装前核对实际监听及沙箱参数，线上监听 127.0.0.1:3000 |
 | ↳ `server/personal-knowledge-web-{backup,smoke,restore-drill,claims,curate}.{service,timer}` | `/etc/systemd/system/` | 定时/触发单元。名称必须与 `systemd-drops/<unit>.service.alert.conf` 一致，否则 `OnFailure` 告警不会挂上 |
-| `offsite/pull-kb-offsite.ps1` | —（Windows 侧） | 异地拉取脚本，计划任务 "KB offsite backup pull" 每日 12:30 运行，备份落 `E:\Backups\personal-knowledge-web` |
+| `offsite/pull-kb-offsite.ps1` | —（Windows 侧） | 历史 Windows 异地拉取脚本；Mac 接替与实际调度状态需独立验证 |
 | `DEPLOYMENT.md` | 不上传 | 本文档 |
 
 ## 部署流程
@@ -38,9 +38,9 @@ MCP 客户端 `personal-wiki` 的注册迁移、独立三端同步路径及验�
 2. 代码以**审核后的 git bundle** 方式传到服务器，更新 `/opt/personal-knowledge-web` 检出
    （服务器脚本刻意不直接从 GitHub 拉取）。
 3. SSH 到服务器，在检出目录执行 `sudo ./deploy.sh`，脚本自动完成：
-   `npm ci` → 校验 → `db:migrate`（幂等）→ 构建（旧构建存为 `.next.rollback`）→
+   `npm ci` → 校验 → `db:migrate`（幂等）→ 构建（旧构建存为 `.next.rollback.*`）→
    `systemctl restart` → 健康检查（`/api/health`）→ 冒烟测试（`npm run smoke:prod`）。
-   任一步失败自动恢复旧构建并重启，退出码 1。
+   保存旧构建后的步骤失败时恢复 `.next` 并重启；代码、依赖和数据库迁移需要独立恢复方案。
 4. 浏览器验证 https://sjtuai.art
 
 ## 常用运维
@@ -56,9 +56,8 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 ## 注意事项
 
-- **项目 README 的「部署到 ECS」章节已过时**（仍写阿里云旧路径 `/root/personal-knowledge-web`、
-  旧 `git pull` 流程），以本文档和 `deploy.sh` 实际逻辑为准。
-- 安全加固：systemd 单元启用 `NoNewPrivileges`、`ProtectSystem=full`，仅 `data/` 可写；
+- 当前部署目标为腾讯云，代码更新走 bundle。下方变更历史中的旧主机、版本及验证数字只描述当时状态。
+- 安全加固：现有 systemd 单元启用 `NoNewPrivileges`、`ProtectSystem=full`；实际可写范围以 `systemctl cat` 和文件权限为准。
   ubuntu 账号读不了 `/opt/personal-knowledge-web` 属预期行为（需 sudo）。
 - Caddy 层无静态文件：改 Caddy 配置后 `sudo systemctl reload caddy`，并同步更新本目录快照。
 
@@ -346,7 +345,7 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
   ⑤ bash 后台任务 300s 截止，SSH 隧道/长驻进程须 `timeout: 0`。
 
 - 2026-09-05（规划对齐迭代：回收站/版本回滚/OKF 导入）：对照《个人知识库项目规划》逐项盘点
-  （报告 `docs/plan-alignment-2026-09-05.md`），修复四个结构性缺口。**① 回收站（软删除）**——
+  （原规划对齐报告已移除，可从 Git 历史查阅），修复四个结构性缺口。**① 回收站（软删除）**——
   迁移 **0015_concept_trash**（`concepts.deleted_at` + 双部分索引）；DELETE 改为入回收站，
   `?purge=1` 彻底删除且仅对已回收条目生效（两段式销毁，409 拦一步到位）；`/trash` 页 +
   `GET/DELETE /api/trash` + `POST /api/concepts/[id]/restore`；**全部查询面排除已删除**：

@@ -4,7 +4,7 @@
 
 架构说明（模块/数据模型/API/关键机制的现状描述，随代码演进维护）见 `docs/ARCHITECTURE.md`；部署与变更历史见 `DEPLOYMENT.md`。
 
-对应《设计方案.txt》的「三层架构」中，本仓库实现的是 **Web 层**（Next.js）与 **运行时知识层**（自建 PostgreSQL + 全文检索）。原始资料层、Vercel Workflows 等留待后续阶段。
+本仓库实现 Web 层（Next.js）与运行时知识层（自建 PostgreSQL）。当前功能及数据流以 `docs/ARCHITECTURE.md` 为准。
 
 ## 技术栈
 
@@ -44,7 +44,7 @@
 app/                  # 页面（登录、概览、知识、来源、设置）与 API 路由
 components/           # 客户端表单与登录组件
 lib/                  # 认证、数据库访问、概念 CRUD、搜索、OKF 导出、附件、[[链接]]
-db/schema.sql         # 数据库 schema（含 pg_trgm、tsvector 触发器、索引）
+db/schema.sql         # 基础 schema；后续演进由 db/migrations/ 维护
 scripts/migrate.ts    # 应用 schema（幂等迁移 runner）
 scripts/seed.ts       # 创建默认管理员（幂等，不覆盖已修改的密码）
 scripts/curate.ts     # 只读知识库整理报告（重复/失效链接/缺描述/陈旧）
@@ -77,7 +77,7 @@ ADMIN_PASSWORD=CHANGE_ME          # 必填；仅 seed 首次创建时使用，se
 ## 本地运行
 
 ```bash
-npm install
+npm ci
 npm run db:migrate   # 应用 schema
 npm run db:seed      # 创建默认管理员 admin
 npm run dev          # http://localhost:3000
@@ -85,7 +85,7 @@ npm run build        # 生产构建
 npm start            # 运行生产构建
 ```
 
-> 本地访问实例上的数据库需先将 `DATABASE_URL` 指向可连通的地址（端口转发/隧道/公网 IP）。
+> 开发与测试使用独立数据库和凭据。不要把上述迁移或 seed 命令误用于生产数据库；生产更新走部署流程。
 
 ## 质量检查（提交前跑一遍）
 
@@ -112,7 +112,7 @@ CI（`.github/workflows/ci.yml`）在 push/PR 时自动执行以上四步（type
 sudo ./deploy.sh
 ```
 
-`deploy.sh` 流程：`npm ci` → `npm run check`（typecheck + lint + test）→ `npm run db:migrate`（幂等，已应用迁移为 no-op）→ `npm run build`（当前构建自动转存为 `.next.rollback`）→ `systemctl restart` → 轮询 `http://127.0.0.1:3000/api/health` 探活 → `npm run smoke:prod` 公网冒烟测试。任一步失败自动恢复旧构建并重启，退出码 1。
+`deploy.sh` 流程：`npm ci` → `npm run check`（typecheck + lint + test）→ `npm run db:migrate`（幂等，已应用迁移为 no-op）→ `npm run build`（当前构建自动转存为 `.next.rollback.*`）→ `systemctl restart` → 轮询 `http://127.0.0.1:3000/api/health` 探活 → `npm run smoke:prod` 公网冒烟测试。保留旧构建后的发布步骤失败时，恢复该 `.next` 构建并重启。代码、依赖与数据库迁移不在构建回滚范围内，需分别备份和恢复。
 
 > ⚠️ **生产环境必须启用 HTTPS（TLS）**。若应用绕过反代以明文 HTTP 直出公网，只能把 `SESSION_COOKIE_SECURE` 设为 `false`，会话 Cookie 将在公网明文传输，网络路径上的中间人可直接接管会话。
 
@@ -122,7 +122,7 @@ sudo ./deploy.sh
 
 ## 用户管理
 
-账号不提供自助注册（单用户知识库，公网开放注册会暴露私有数据）。新增/重置用户由部署者通过命令行完成：
+账号不提供公网自助注册。管理员可通过 `/users` 页面管理账户，也可在受控环境使用以下命令行工具：
 
 ```powershell
 # Windows PowerShell —— 新增用户
@@ -147,23 +147,6 @@ NEW_USERNAME=alice NEW_PASSWORD=xxx RESET=1 npm run db:add-user
 - `NEW_PASSWORD` 仅在进程环境内使用；不要把它写进 `.env` 长期留存（`.env` 已 gitignore，但仍建议用完即清）。
 - 脚本读 `.env` 的 `DATABASE_URL`：在实例本地跑用 `127.0.0.1:5432`；从其它机器跑需先把 host 换成可达地址（公网 IP 或隧道）。
 
-## 部署到 Vercel（备选方案）
-
-1. 将本仓库推送到 GitHub。
-2. 在 Vercel 导入该仓库（框架自动识别 Next.js）。
-3. 在 Vercel 项目 **Environment Variables** 中配置：
-   - `DATABASE_URL` —— 指向**公网可达**的 PostgreSQL 连接串
-   - `SESSION_SECRET` —— 随机 64 位 hex
-   - `ADMIN_USERNAME`（可选）
-4. 部署。首次需要 `npm run db:migrate` + `db:seed`（在能访问数据库的环境执行一次）。
-
-### ⚠️ 关键：数据库网络连通性
-
-数据库部署在云服务器本机（不对公网开放 5432）。要让外部环境（如 Vercel）可访问，任选其一：
-
-- **内网穿透/隧道**：Cloudflare Tunnel、frp 等，将服务器 `5432` 暴露为公网 endpoint（必须强制 TLS）。
-- **改用云数据库（推荐）**：将 `DATABASE_URL` 换成 Supabase / Neon 等托管 PostgreSQL（托管侧自带 TLS 与访问控制，但需迁移数据）。
-
 ## 附件
 
 每个知识概念下可上传附件（单文件 ≤ 100 MB），并支持浏览器内预览：
@@ -171,18 +154,18 @@ NEW_USERNAME=alice NEW_PASSWORD=xxx RESET=1 npm run db:add-user
 - **存储**：文件字节保存在服务器本地磁盘（`ATTACHMENT_DIR`，默认 `./data/attachments`，已 gitignore）；数据库 `attachments` 表只存元数据（文件名 / MIME / 大小 / 哈希 / 磁盘 key）。
 - **预览**：图片（`<img>`）、PDF（`<iframe>`）、文本/代码（`<pre>`）、音视频（`<audio>`/`<video>`）原生预览；音视频支持 Range 拖动进度。其它类型走下载。
 - **鉴权**：上传 / 预览 / 下载 / 删除都走登录会话（JWT cookie），文件接口不公开。
-- **注意**：本地磁盘存储要求**应用与数据库同机部署（云服务器）**。若未来迁到 Vercel，需改用对象存储（OSS 等）。
+- **注意**：当前部署依赖持久附件目录。迁往无持久本地磁盘的平台前，需调整附件存储并验证数据库连接。
 
 ## 备份与恢复
 
-个人知识库最重要的运维动作。服务器已配置 systemd 定时备份 `personal-knowledge-web-backup.timer`：每日备份 PostgreSQL 数据库、附件、代码 git bundle 与 SHA256 校验和到 `/var/backups/personal-knowledge-web/`，保留 30 天（以 `server/backup.sh` 的 `RETENTION_DAYS` 为准）。
+个人知识库最重要的运维动作。服务器已配置 systemd 定时备份 `personal-knowledge-web-backup.timer`：每日备份 PostgreSQL 数据库、附件、代码提交号（`app-commit.txt`）与 SHA256 校验和到 `/var/backups/personal-knowledge-web/`，保留 30 天（以 `server/backup.sh` 的 `RETENTION_DAYS` 为准）。
 
 ```bash
 sudo systemctl status personal-knowledge-web-backup.service   # 查看最近一次备份
 sudo systemctl list-timers | grep backup                      # 查看下次备份时间
 ```
 
-恢复演练（新空库 + 校验 SHA256SUMS + `pg_restore --list` 预检）的完整步骤见 `docs/OPERATIONS.md`。数据库与附件按同一时间戳归档，恢复时必须成对还原才能保持一致。
+源码 Git bundle 需要单独备份；提交号本身不能重建源码。当前恢复演练脚本校验备份并恢复测试数据库、检查基础表，不验证附件解包和应用启动。完整恢复还需成对恢复数据库与附件并运行应用探针，见 `docs/OPERATIONS.md`。
 
 ## OKF 导出说明
 
@@ -198,12 +181,13 @@ sudo systemctl list-timers | grep backup                      # 查看下次备�
 ```
 每个概念文件带 YAML frontmatter，`type` 必填，并含 `status`、`generated`（`at` 取自当前版本创建时间，不受元数据-only 编辑影响）、自定义 `kb` 字段（id/version/language/content_hash/sensitivity）。
 
-## 后续阶段（方案文档 P1–P5）
+## 后续能力
 
-- ~~pgvector 向量检索 + 混合检索（RRF）~~ 已上线：embedding 端点已配置（见 DEPLOYMENT.md），检索为 BM25 + 语义 RRF 融合（2026-09-04 起）
-- ~~注入流程（Markdown/PDF/DOCX/URL）、LLM 知识原子化~~ Markdown 已产品化：`npm run ingest`（含 §3.3.5 上下文锚定分块）
-- ~~近似去重、冲突审核~~ 部分落地：写入时精确查重（409）+ `npm run curate` 整理报告；冲突审核/Claim 抽取待做
-- OKF 同步到 Private Git 仓库
+混合检索、Markdown ingest、审核队列、Claim 审计、异步任务与 RAG 问答均已实现，见前面的功能清单。尚未纳入当前交付的能力包括：
+
+- PDF／DOCX／URL 的自动解析录入。
+- 包含历史版本和附件的全量 OKF 导出。
+- OKF 同步到 Private Git 仓库。
 
 ## 安全说明
 
