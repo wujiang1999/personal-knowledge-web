@@ -63,6 +63,29 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 ## 变更历史
 
+- 2026-09-16（检索方案重构：BM25F + 章节定位 + 块级语义召回，e3202e6 → 修复 34ce25d）：
+  按「P0→P1 逐步重构」清单落地，**全部为检索与导出层改动，无迁移、无数据变更**。
+  **① BM25F**——`lib/bm25.ts` 给出参考实现（字段权重 title 2 / description 1.25 / body 1，
+  逐字段按自身均长归一），SQL 用新的 `stats` CTE 取代原先「三字段拼一个 bag 共用一个 tf」的
+  打分；测试钉死字面量数值。**注意：词法分尺度整体上移（标题命中最高约 2×），
+  `ASK_MIN_SCORE` 与 ingest 查重的 `score ≥ 25` 仍是旧尺度标定值，尚未重标**（已写入
+  `.env.example` 与 `ARCHITECTURE.md`）。**② `type:` 算子**——大小写不敏感；算子名加词边界
+  （`hashtag:x`/`filetype:pdf` 不再被误剥）；并修复 trgm 兜底此前**完全忽略算子过滤**的泄漏。
+  **③ `section`**——结果与 ask 资料都带命中处的章节路径（新 `lib/headings.ts`，围栏代码感知），
+  内部锚点 `match_at` 不出响应。**④ 块级语义召回**——HNSW top-N chunk 池 + 抬高
+  `hnsw.ef_search` + 按概念聚合，取代用不上向量索引、每次全扫作用域 chunk 的
+  `DISTINCT ON (concept_id)`。**⑤ OKF**——type→目录别名；`kb.title_heading` 让导出文件只有一个
+  H1 且导出/导入仍逐字节还原；`npm run curate` 新增「正文首行 H1 与标题重复」一节。
+  **⑥ 事故与修复**——首发（e3202e6）上线后 `/api/search` 全部 500：`CROSS JOIN stats s` 写在
+  LATERAL **之后**，而 LATERAL 只能看到其左侧的 FROM 项（改动前的写法把统计子查询放在外层
+  选择列表，故不受此约束）。健康检查与冒烟测试都不覆盖检索，脚本按「构建成功」收尾。
+  34ce25d 把 `stats` 前移。**验收**：本地 `npm run check` 通过（326 测试）+ 生产构建；
+  修复后先用 `EXPLAIN`（仅计划、不执行）把四条语句（BM25F / 算子列表 / trgm / 语义 chunk
+  + `hnsw.ef_search`）在生产库上验到 4/4 解析通过，再 FF + `deploy.sh`；
+  上线后实测 `kb_search`：BM25F 分数生效（标题命中 26.47）、`type:Reference` 过滤生效
+  （40→8 条且全为 Reference）、语义独有行带 `section`（score=2 的 RRF 尺度也如实存在）。
+  MCP 侧同步 types/tools/README 契约描述并推送，三端 HEAD 一致（01082d9）。
+
 - 2026-09-13（Embedding 模型切换）：从 `text-embedding-v4` 切换为
   `qwen3.7-text-embedding-flash`，保留原百炼端点、密钥及 1024 维。先离线准备
   48 条新向量（47 条有效知识 + 回收站 1 条），再短暂停服务，在事务内校验源数据

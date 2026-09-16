@@ -1,7 +1,19 @@
 # personal-wiki MCP integration
 
-## Current contract: v0.11.0 (2026-09-13)
+## Current contract: v0.11.0 (2026-09-13), retrieval fields extended 2026-09-16
 
+- Search results carry `section` (the heading path a hit sits under, e.g.
+  `第4章 > 4.2 检索`) alongside `score` and `similarity`. `score` is a BM25F
+  value: the three fields are weighted (title 2 / description 1.25 / body 1) and
+  length-normalized per field, so a title hit scores about twice a single body
+  occurrence and the old "typically 2-15" range no longer describes it. A row
+  injected by semantic recall alone still carries the fused RRF score (~2),
+  which is not comparable with the lexical scale — use `similarity` for
+  cross-path comparison. Ask sources carry `section` too.
+- Search operators are `tag:`, `category:`, `status:` and `type:` (the last is
+  new, matched case-insensitively). Operator names need a word boundary, so
+  `filetype:pdf` is searched as text rather than read as a `type:` filter, and
+  operators now also constrain the fuzzy and semantic recall paths.
 - The MCP judge calls authenticated `POST /api/judge`; only the server holds
   supplier credentials. `KB_LLM_*` client settings are no longer used.
 - The judge classifies complete documents and returns an exact candidate ID.
