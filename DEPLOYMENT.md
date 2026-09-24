@@ -63,6 +63,26 @@ curl http://127.0.0.1:3000/api/health          # 服务器本机健康检查
 
 ## 变更历史
 
+- 2026-09-24（正文公式渲染接入 KaTeX，bbb9827）：正文/预览里的 LaTeX 公式此前只能显示源码。
+  按用户取舍（2026-09-24 确认）**行内 `$…$` 与块级 `$$…$$` 全支持**（remark-math 单美元默认开；
+  代价：成对普通文本美元会被当公式，如「价格 $5，优惠 $3」「$HOME…$PATH」，反引号或 `\$` 规避）。
+  **① 共享管线**——新增 `lib/markdown.ts`：remark-gfm + remark-math → rehype-katex
+  （`throwOnError:false` 非法公式红字回显不崩页、`strict:false` 宽容粘贴式 LaTeX），
+  `katex/dist/katex.min.css` 随管线引入；字体由 Next 打进 `.next/static/media`（60 个，
+  无 CDN，CSP `font-src 'self'` 不用改）。**② 两处渲染器收口**——`concept-body.tsx`
+  （详情页、`![[…]]` 嵌入、ask 答案）与 `markdown-preview.tsx`（编辑器预览）改用共享插件列表；
+  容器补 `[&>.katex-display]:overflow-x-auto`，长块级公式横向滚动（沿 `[&>pre]` 惯例）；
+  KaTeX 不进编辑器 chunk（懒加载边界注释同步）。**③ 文档**——ARCHITECTURE.md 里
+  「Markdown 渲染为纯文本 `<pre>`」的过时表述改为现状（react-markdown + KaTeX，
+  用户原始 HTML 仍不解释）。**验收**：本地 `npm run check`（326 测试）+ 生产构建；
+  ego lite 本地真实页面目检（双渲染器、浅/深色截图，各 10 个 katex 节点、4 个块级
+  `overflow:auto`、KaTeX_Main/Math 字体实载、表格/行内代码/维基链接/嵌入无回归）；
+  服务器 bundle FF `34ce25d→bbb9827` + `deploy.sh` 门禁全过（`deployed: bbb9827`，
+  冒烟 health=200/public=200/book=200）；公网 `health=200 {"ok":true}`、根 307→/login、
+  线上 KaTeX 主 CSS（`1439gi9cm43wi.css`，`.katex-display` 规则在）与 `KaTeX_Main-Regular`
+  woff2 均 200。**未验**：登录态下线上条目页的浏览器目检（本会话无站点凭据）——
+  功能面由本地同管线目检覆盖，登录后看任意含公式条目即可复核。
+
 - 2026-09-16（检索方案重构：BM25F + 章节定位 + 块级语义召回，e3202e6 → 修复 34ce25d）：
   按「P0→P1 逐步重构」清单落地，**全部为检索与导出层改动，无迁移、无数据变更**。
   **① BM25F**——`lib/bm25.ts` 给出参考实现（字段权重 title 2 / description 1.25 / body 1，

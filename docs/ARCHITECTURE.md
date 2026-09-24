@@ -160,7 +160,9 @@ BM25F + embedding 混合，五级降级链，任何一级失败都退化而不�
    `Cache-Control: no-store`；请求体上限链（Caddy 128MB → `proxyClientMaxBodySize` 110MB → 应用 100MB）；
    附件 magic-bytes 校验 + SVG/HTML/XML 一律降级 octet-stream 强制下载（防存储型 XSS，
    判定逻辑抽在 `lib/attachment-mime.ts` 服务端/客户端同源）；`[id]` 路由先做 UUID 校验，
-   非法 id 干净 404 而非 pg 22P02→500；Markdown 渲染为纯文本语义（`<pre>`），永不注入 HTML。
+   非法 id 干净 404 而非 pg 22P02→500；Markdown 经 react-markdown 渲染（GFM + KaTeX 公式，
+   共享管线 `lib/markdown.ts`），用户原始 HTML 仍不解释，公式 HTML 由 KaTeX 服务端生成
+   （非法公式红字回显而非崩页）。
 
 ## 六、API 面（`app/api/`）
 
