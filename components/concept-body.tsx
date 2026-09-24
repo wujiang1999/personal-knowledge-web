@@ -2,12 +2,13 @@ import Link from "next/link";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { remarkPlugins, rehypePlugins } from "@/lib/markdown";
 import { embedWikiLinks, splitBodyBlocks } from "@/lib/links";
+import { normalizeMathDelimiters } from "@/lib/markdown-source";
 
 /** Render a concept body as Markdown (GFM: tables, strikethrough, task
- * lists; math: `$…$` / `$$…$$` rendered by KaTeX — see lib/markdown.ts).
- * Raw HTML is not interpreted — react-markdown skips HTML nodes by
- * default, keeping the previous `<pre>` rendering's XSS-safe-by-construction
- * property. `[[标题]]` wiki references are embedded as `wiki:`-scheme links
+ * lists; math: `$…$` / `$$…$$` plus LaTeX-native `\(…\)` / `\[…\]`,
+ * rendered by KaTeX — see lib/markdown.ts). Raw HTML is not interpreted:
+ * react-markdown skips HTML nodes by default, keeping the previous
+ * XSS-safe-by-construction property. `[[标题]]` wiki references are embedded
  * (lib/links.ts `embedWikiLinks`) and resolved here against `titleToId`:
  * resolved targets link to the concept page; unresolved ones render as
  * dotted links that open the create form prefilled with the missing title
@@ -75,7 +76,7 @@ function MarkdownChunk({ body, titleToId }: { body: string; titleToId: Map<strin
       components={{ a: renderAFor(titleToId) }}
       urlTransform={urlTransform}
     >
-      {embedWikiLinks(body)}
+      {normalizeMathDelimiters(embedWikiLinks(body))}
     </ReactMarkdown>
   );
 }

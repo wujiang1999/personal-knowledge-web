@@ -5,6 +5,7 @@ import Link from "next/link";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import { remarkPlugins, rehypePlugins } from "@/lib/markdown";
 import { embedWikiLinks } from "@/lib/links";
+import { normalizeMathDelimiters } from "@/lib/markdown-source";
 import type { EditorTitle, PreviewProps } from "./markdown-editor";
 
 /** Client-side draft preview with the same wiki-link semantics as the
@@ -71,7 +72,7 @@ export function MarkdownPreview({ body, getTitles }: PreviewProps) {
           components={{ a: renderA }}
           urlTransform={urlTransform}
         >
-          {embedWikiLinks(body)}
+          {normalizeMathDelimiters(embedWikiLinks(body))}
         </ReactMarkdown>
       </div>
     </div>

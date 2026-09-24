@@ -3,6 +3,9 @@
  * so they cannot drift apart. GFM (tables, task lists, strikethrough) plus
  * math: `remark-math` parses `$…$` (inline) and fenced `$$…$$` (block), and
  * `rehype-katex` renders both to KaTeX HTML at render time — no client JS.
+ * `normalizeMathDelimiters` (lib/markdown-source.ts) is applied to the
+ * source by each renderer first, because the library also has to accept the
+ * LaTeX-native `\(…\)` / `\[…\]` that the corpus is full of.
  *
  * Single-dollar inline math is deliberately ON (Obsidian/Pandoc convention):
  * it also means paired plain-text dollars (`价格 $5，优惠 $3`, `$HOME … $PATH`)
