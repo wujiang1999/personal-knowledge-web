@@ -162,7 +162,9 @@ BM25F + embedding 混合，五级降级链，任何一级失败都退化而不�
    判定逻辑抽在 `lib/attachment-mime.ts` 服务端/客户端同源）；`[id]` 路由先做 UUID 校验，
    非法 id 干净 404 而非 pg 22P02→500；Markdown 经 react-markdown 渲染（GFM + KaTeX 公式，
    共享管线 `lib/markdown.ts`），用户原始 HTML 仍不解释，公式 HTML 由 KaTeX 服务端生成
-   （非法公式红字回显而非崩页）。
+   （非法公式红字回显而非崩页）。语料以 LaTeX 原生定界符 `\(…\)` / `\[…\]` 为主，而
+   CommonMark 会在插件看到语法树之前吞掉 `\`（`\(` → 纯文本 `(`），因此渲染前先由
+   `lib/markdown-source.ts` 在源码层归一化定界符，围栏代码与行内代码原样跳过。
 
 ## 六、API 面（`app/api/`）
 
