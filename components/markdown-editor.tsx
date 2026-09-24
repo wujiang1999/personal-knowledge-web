@@ -217,8 +217,9 @@ export function MarkdownEditor({
     setMode(next ? "preview" : "edit");
     if (next && !PreviewComp) {
       // Static import of the preview module is what this lazy toggle avoids:
-      // react-markdown (~100KB gz) must not join the editor chunk before the
-      // user ever opens 预览 — a genuine runtime-selected module boundary.
+      // react-markdown (~100KB gz) plus KaTeX (lib/markdown.ts) must not join
+      // the editor chunk before the user ever opens 预览 — a genuine
+      // runtime-selected module boundary.
       import("./markdown-preview").then((m) => setPreviewComp(() => m.MarkdownPreview));
     }
   }

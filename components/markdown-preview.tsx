@@ -3,14 +3,16 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { remarkPlugins, rehypePlugins } from "@/lib/markdown";
 import { embedWikiLinks } from "@/lib/links";
 import type { EditorTitle, PreviewProps } from "./markdown-editor";
 
 /** Client-side draft preview with the same wiki-link semantics as the
  * server-rendered ConceptBody: `[[标题]]` resolves against the loaded
  * titles, `![[标题]]` embeds render as 📄 links (resolved transclusion is
- * the detail page's job). Loaded lazily by MarkdownEditor on first 预览. */
+ * the detail page's job), and `$…$` / `$$…$$` render as KaTeX exactly like
+ * the detail page (shared pipeline, lib/markdown.ts). Loaded lazily by
+ * MarkdownEditor on first 预览. */
 export function MarkdownPreview({ body, getTitles }: PreviewProps) {
   const [titleToId, setTitleToId] = useState<Map<string, string>>(new Map());
 
@@ -62,8 +64,13 @@ export function MarkdownPreview({ body, getTitles }: PreviewProps) {
 
   return (
     <div className="min-h-[380px] overflow-auto rounded-md border border-zinc-200 bg-white p-4 text-sm dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="prose prose-sm prose-zinc max-w-none dark:prose-invert [&>pre]:overflow-x-auto">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: renderA }} urlTransform={urlTransform}>
+      <div className="prose prose-sm prose-zinc max-w-none dark:prose-invert [&>pre]:overflow-x-auto [&>.katex-display]:overflow-x-auto">
+        <ReactMarkdown
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
+          components={{ a: renderA }}
+          urlTransform={urlTransform}
+        >
           {embedWikiLinks(body)}
         </ReactMarkdown>
       </div>
