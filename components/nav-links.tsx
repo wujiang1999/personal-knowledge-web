@@ -27,14 +27,19 @@ export function NavLinks({
             key={link.href}
             href={link.href}
             aria-current={active ? "page" : undefined}
-            className={`flex items-center gap-2 whitespace-nowrap rounded-md text-sm ${
-              vertical ? "w-full px-3 py-2" : "px-3 py-1.5"
+            className={`flex items-center gap-2 whitespace-nowrap rounded-lg text-sm ${
+              vertical
+                ? "w-full border px-3 py-2.5 shadow-sm"
+                : "border border-transparent px-3 py-1.5"
             } ${
               active
-                ? "bg-zinc-900 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-                : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                ? "border-zinc-900 bg-zinc-900 font-semibold text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                : vertical
+                  ? "border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-600 dark:hover:bg-zinc-800"
+                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
             }`}
           >
+            <span className={vertical ? "min-w-0 flex-1" : undefined}>{link.label}</span>
             {link.badge ? (
               <span
                 className={

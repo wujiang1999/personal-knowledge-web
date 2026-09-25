@@ -2,6 +2,7 @@ import { requireUser } from "@/lib/requireUser";
 import { countReviewItems } from "@/lib/reviews";
 import { LogoutButton } from "@/components/logout-button";
 import { NavLinks } from "@/components/nav-links";
+import { ResizableAppShell } from "@/components/resizable-sidebar";
 import { QuickSwitcher } from "@/components/quick-switcher";
 import { ThemeToggle } from "@/components/theme-toggle";
 
@@ -38,25 +39,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       : withBadges;
 
   return (
-    <div className="min-h-screen md:grid md:grid-cols-[15rem_minmax(0,1fr)]">
-      <aside
-        aria-label="主导航"
-        className="sticky top-0 hidden h-screen flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 md:flex"
-      >
-        <div className="flex h-16 shrink-0 items-center px-5 text-lg font-semibold">知识库</div>
-        <nav className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-          <NavLinks items={links} vertical />
-        </nav>
-        <div className="shrink-0 border-t border-zinc-200 p-3 dark:border-zinc-800">
-          <div className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2">
-            <QuickSwitcher />
-            <span className="truncate text-sm text-zinc-500 dark:text-zinc-400">{user.username}</span>
-            <ThemeToggle />
-            <LogoutButton />
-          </div>
+    <ResizableAppShell
+      navigation={<NavLinks items={links} vertical />}
+      footer={
+        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2">
+          <QuickSwitcher />
+          <span className="truncate text-sm text-zinc-600 dark:text-zinc-300">{user.username}</span>
+          <ThemeToggle />
+          <LogoutButton />
         </div>
-      </aside>
-
+      }
+    >
       <div className="min-w-0">
         <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95 md:hidden">
           <div className="flex h-14 items-center justify-between gap-3 px-4">
@@ -74,6 +67,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </header>
         <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 md:px-8">{children}</main>
       </div>
-    </div>
+    </ResizableAppShell>
   );
 }
