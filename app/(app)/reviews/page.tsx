@@ -28,6 +28,7 @@ export default async function ReviewsPage() {
     targetId: item.targetConceptId,
     targetTitle: item.targetTitle,
     targetBody: item.targetBody ?? "",
+    stale: item.stale,
     newBody: item.payload.body,
     mergedDraft: mergeDraft(item.targetBody ?? "", item.payload.body),
     similarity: item.similarity,
@@ -41,8 +42,8 @@ export default async function ReviewsPage() {
       <div>
         <h1 className="text-2xl font-semibold">审核队列</h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          写路径拦下的内容都在这里等人工裁决：ingest 命中的近似重复、OKF 导入的同名异内容、agent 判出的冲突。
-          四种处理方式全部落在不可变版本上——采用新内容 / 合并生成目标条目的新版本，分别保留新建条目，保留旧内容只结案。
+          写路径拦下的内容与知识质检风险都在这里等人工裁决：近似重复、同名异内容、agent 判出的冲突，以及人工/模型发现的质量问题。
+          采用建议或保存人工修订都会生成可回滚的新版本；保留旧内容只结案，冲突候选也可分别保留。
         </p>
       </div>
 

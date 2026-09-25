@@ -22,6 +22,7 @@ export interface ReviewCardItem {
   similarity: number | null;
   score: number | null;
   reason: string | null;
+  stale: boolean;
   createdAt: string;
 }
 
@@ -76,6 +77,9 @@ export function ReviewQueue({ items }: { items: ReviewCardItem[] }) {
         const lines = diffLines(item.targetBody, item.newBody);
         const changes = lines.filter((l) => l.kind !== "same").length;
         const busy = busyId === item.id;
+        const qualityRisk = item.kind === "quality_risk";
+        const canApply = item.newBody.trim() !== item.targetBody.trim();
+        const stale = qualityRisk && item.stale;
         return (
           <article
             key={item.id}
@@ -132,6 +136,11 @@ export function ReviewQueue({ items }: { items: ReviewCardItem[] }) {
                 />
               )}
             </div>
+            {stale && (
+              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
+                目标条目在本次审阅后已经变化。为避免覆盖新修改，批准与编辑已停用；请忽略此风险并重新运行审阅。
+              </p>
+            )}
 
             {error?.id === item.id && (
               <p className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
@@ -142,44 +151,47 @@ export function ReviewQueue({ items }: { items: ReviewCardItem[] }) {
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
                 onClick={() => resolve(item, "adopted_new")}
-                disabled={busy || !item.targetId}
+                disabled={busy || !item.targetId || stale || (qualityRisk && !canApply)}
+                title={stale ? "目标条目在审阅后已经变化" : qualityRisk && !canApply ? "没有可直接采用的修订；请用“编辑建议”人工修改" : undefined}
                 className={btnPrimary}
               >
-                {busy ? "处理中…" : "采用新内容（生成新版本）"}
+                {busy ? "处理中…" : stale ? "目标已变化" : qualityRisk ? "批准建议（生成新版本）" : "采用新内容（生成新版本）"}
               </button>
               <button
                 onClick={() => {
                   setMergeFor(mergeFor === item.id ? null : item.id);
-                  setMergeText(item.mergedDraft);
+                  setMergeText(qualityRisk ? item.newBody : item.mergedDraft);
                 }}
-                disabled={busy || !item.targetId}
+                disabled={busy || !item.targetId || stale}
                 className={btnSecondary}
               >
-                {mergeFor === item.id ? "取消合并" : "合并…"}
+                {mergeFor === item.id ? "取消编辑" : qualityRisk ? "编辑建议…" : "合并…"}
               </button>
-              <button
-                onClick={() => {
-                  if (
-                    item.targetTitle === item.title &&
-                    !window.confirm(
-                      "候选与目标同名，分别保留会产生两条同名条目。继续吗？"
-                    )
-                  ) {
-                    return;
-                  }
-                  resolve(item, "kept_both");
-                }}
-                disabled={busy}
-                className={btnSecondary}
-              >
-                分别保留（新建条目）
-              </button>
+              {!qualityRisk && (
+                <button
+                  onClick={() => {
+                    if (
+                      item.targetTitle === item.title &&
+                      !window.confirm(
+                        "候选与目标同名，分别保留会产生两条同名条目。继续吗？"
+                      )
+                    ) {
+                      return;
+                    }
+                    resolve(item, "kept_both");
+                  }}
+                  disabled={busy}
+                  className={btnSecondary}
+                >
+                  分别保留（新建条目）
+                </button>
+              )}
               <button onClick={() => resolve(item, "kept_old")} disabled={busy} className={btnSecondary}>
-                保留旧内容
+                {qualityRisk ? "忽略风险" : "保留旧内容"}
               </button>
             </div>
 
-            {mergeFor === item.id && (
+            {mergeFor === item.id && !stale && (
               <div className="mt-2">
                 <textarea
                   value={mergeText}
@@ -188,7 +200,9 @@ export function ReviewQueue({ items }: { items: ReviewCardItem[] }) {
                   className={textareaCls}
                 />
                 <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                  草稿是「旧正文 + 分隔线 + 候选正文」的拼接，请删减成最终版本；保存后进入目标条目的新版本（可回滚）。
+                  {qualityRisk
+                    ? "请在当前建议稿上核对并编辑；保存后进入目标条目的新版本（可回滚）。"
+                    : "草稿是「旧正文 + 分隔线 + 候选正文」的拼接，请删减成最终版本；保存后进入目标条目的新版本（可回滚）。"}
                 </p>
                 <div className="mt-2 flex items-center gap-2">
                   <button
@@ -196,7 +210,7 @@ export function ReviewQueue({ items }: { items: ReviewCardItem[] }) {
                     disabled={busy || mergeText.trim().length === 0}
                     className={btnPrimary}
                   >
-                    {busy ? "处理中…" : "保存合并结果"}
+                    {busy ? "处理中…" : qualityRisk ? "保存修订" : "保存合并结果"}
                   </button>
                 </div>
               </div>

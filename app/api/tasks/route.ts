@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { executeAutoReviewTask } from "@/lib/quality-checks";
+import { AUTO_REVIEW_DEFAULT_SIZE, AUTO_REVIEW_MAX_SIZE } from "@/lib/quality-review-contract";
 import { requireApiUser } from "@/lib/requireUser";
 import { executeResummarizeTask, RESUMARIZE_MAX_BATCH } from "@/lib/summary";
 import { enqueueTask, findLiveTask, listTasks, TASK_KINDS, type TaskKind } from "@/lib/tasks";
@@ -7,14 +9,18 @@ import { withRoute } from "@/lib/withRoute";
 
 /** 任务面：GET 历史、POST 入队维护类任务。
  *
- * 问答有自己的入口（`POST /api/ask`，带"同一问题在飞行中复用"的挡板）；这里
- * 只收**批量维护**任务——当前是「补齐缺失描述」。kind 用 discriminated union
- * 逐个声明，新增任务类型必须同时在 lib/tasks 的 TASK_KINDS 与下面的 schema 里登记。 */
+ * 问答有自己的入口（`POST /api/ask`，带“同一问题在飞行中复用”的挡板）；这里
+ * 收批量维护与自动审阅。kind 用 discriminated union 登记，新增任务类型必须
+ * 同时更新 lib/tasks 的 TASK_KINDS。 */
 
 const createSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("resummarize"),
     limit: z.number().int().min(1).max(RESUMARIZE_MAX_BATCH).optional().describe("本次最多处理多少条"),
+  }),
+  z.object({
+    kind: z.literal("auto-review"),
+    limit: z.number().int().min(1).max(AUTO_REVIEW_MAX_SIZE).optional().describe("本次抽查多少条"),
   }),
 ]);
 
@@ -46,8 +52,18 @@ export const POST = withRoute("POST /api/tasks", async (req: Request) => {
     return NextResponse.json({ error: "invalid request" }, { status: 400 });
   }
 
+  if (body.kind === "auto-review") {
+    const limit = body.limit ?? AUTO_REVIEW_DEFAULT_SIZE;
+    const live = await findLiveTask(user, "auto-review", () => true);
+    if (live) {
+      return NextResponse.json({ id: live.id, status: live.status, deduped: true }, { status: 202 });
+    }
+    const id = await enqueueTask(user, { kind: "auto-review", payload: { kind: "auto-review", limit } });
+    void executeAutoReviewTask(id, user, limit);
+    return NextResponse.json({ id, status: "queued", deduped: false }, { status: 202 });
+  }
+
   const limit = body.limit ?? RESUMARIZE_MAX_BATCH;
-  // 双击/重试的挡板：同类任务在飞行中就复用，不并行跑两遍全库。
   const live = await findLiveTask(user, "resummarize", () => true);
   if (live) {
     return NextResponse.json({ id: live.id, status: live.status, deduped: true }, { status: 202 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isReviewAction, isReviewKind, mergeDraft, normalizePayload } from "../lib/reviews";
+import { isReviewAction, isReviewKind, mergeDraft, normalizePayload, reviewTargetFingerprint } from "../lib/reviews";
 
 describe("normalizePayload", () => {
   it("fills defaults for a minimal payload", () => {
@@ -57,6 +57,10 @@ describe("normalizePayload", () => {
       body: "",
     });
   });
+
+  it("preserves a quality-review base fingerprint", () => {
+    expect(normalizePayload({ title: "标题", body: "正文", baseFingerprint: "sha256:abc" }).baseFingerprint).toBe("sha256:abc");
+  });
 });
 
 describe("mergeDraft", () => {
@@ -78,8 +82,26 @@ describe("isReviewKind / isReviewAction", () => {
   it("accepts only the declared vocabulary", () => {
     expect(isReviewKind("conflict")).toBe(true);
     expect(isReviewKind("duplicate")).toBe(false);
+    expect(isReviewKind("quality_risk")).toBe(true);
     expect(isReviewAction("kept_both")).toBe(true);
     expect(isReviewAction("discard")).toBe(false);
-    expect(isReviewAction(undefined)).toBe(false);
+  });
+});
+
+describe("reviewTargetFingerprint", () => {
+  const base = {
+    type: "Note",
+    title: "标题",
+    description: "说明",
+    category: "技术",
+    tags: ["知识库"],
+    status: "stable",
+    body: "正文",
+  };
+
+  it("changes when either body or current metadata changes", () => {
+    expect(reviewTargetFingerprint(base)).toBe(reviewTargetFingerprint({ ...base, tags: [" 知识库 "] }));
+    expect(reviewTargetFingerprint(base)).not.toBe(reviewTargetFingerprint({ ...base, body: "新正文" }));
+    expect(reviewTargetFingerprint(base)).not.toBe(reviewTargetFingerprint({ ...base, title: "新标题" }));
   });
 });

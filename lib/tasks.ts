@@ -12,7 +12,7 @@ import { ModelLimitError, positiveLimit } from "./usage-guard";
  *  · 本批不自动重试（见迁移注释的取舍）。
  * 租约清理挂在读取路径上（getTask/listTasks 先清后读），没有定时器。 */
 
-export const TASK_KINDS = ["ask", "resummarize"] as const;
+export const TASK_KINDS = ["ask", "resummarize", "auto-review"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 
 export const TASK_STATUSES = ["queued", "running", "done", "failed"] as const;

@@ -22,12 +22,12 @@ import type { AuthUser, ScopeUser } from "./requireUser";
  *   kept_both   分别保留（用候选内容新建条目）
  * 全部走既有的不可变版本/条目写入路径，因此裁决本身也符合「历史不可改写」。 */
 
-/** 待裁决的两种性质：事实冲突（同名异内容）与近似重复（阈值命中但未必冲突）。 */
-export const REVIEW_KINDS = ["conflict", "near_duplicate"] as const;
+/** 待裁决性质：内容冲突、近似重复，或质检发现的质量风险。 */
+export const REVIEW_KINDS = ["conflict", "near_duplicate", "quality_risk"] as const;
 export type ReviewKind = (typeof REVIEW_KINDS)[number];
 
 /** 谁把它放进队列——报告文案与排查都靠它。 */
-export const REVIEW_SOURCES = ["ingest", "okf-import", "mcp", "api", "claims"] as const;
+export const REVIEW_SOURCES = ["ingest", "okf-import", "mcp", "api", "claims", "spot-check", "auto-review"] as const;
 export type ReviewSource = (typeof REVIEW_SOURCES)[number];
 
 export const REVIEW_ACTIONS = ["kept_old", "adopted_new", "merged", "kept_both"] as const;
@@ -47,6 +47,8 @@ export interface ReviewPayload {
   tags: string[];
   status: (typeof CONCEPT_STATUSES)[number];
   body: string;
+  /** 质检快照指纹：批准修改前必须仍与目标当前内容一致。 */
+  baseFingerprint?: string;
 }
 
 export function isReviewKind(v: unknown): v is ReviewKind {
@@ -75,6 +77,7 @@ export function normalizePayload(raw: unknown): ReviewPayload {
         .filter(Boolean)
         .slice(0, 30)
     : [];
+  const baseFingerprint = str(o.baseFingerprint, 100);
   const description = str(o.description, 1000);
   const category = str(o.category, 200);
   return {
@@ -87,7 +90,30 @@ export function normalizePayload(raw: unknown): ReviewPayload {
       ? (status as ReviewPayload["status"])
       : "stable",
     body: typeof o.body === "string" ? o.body : "",
+    ...(baseFingerprint ? { baseFingerprint } : {}),
   };
+}
+
+/** Stable identity for the complete current target (metadata + body). A version
+ * number alone is insufficient because metadata-only saves keep that number. */
+export function reviewTargetFingerprint(input: {
+  type: string;
+  title: string;
+  description?: string | null;
+  category?: string | null;
+  tags: string[];
+  status: string;
+  body: string;
+}): string {
+  return sha256Hex(JSON.stringify([
+    input.type.trim(),
+    input.title.trim(),
+    input.description?.trim() || null,
+    input.category?.trim() || null,
+    input.tags.map((tag) => tag.trim()).filter(Boolean),
+    input.status,
+    input.body,
+  ]));
 }
 
 /**
@@ -116,6 +142,8 @@ export interface ReviewItem {
   targetTitle: string | null;
   /** 目标条目当前正文（已删除/无目标时为 null）——裁决页的差异对比用。 */
   targetBody: string | null;
+  /** 质检候选生成后目标是否已变化；页面据此禁用批准/编辑。 */
+  stale: boolean;
   similarity: number | null;
   score: number | null;
   reason: string | null;
@@ -135,6 +163,8 @@ export interface EnqueueReviewInput {
   similarity?: number | null;
   score?: number | null;
   reason?: string | null;
+  /** 质检候选对应的目标内容指纹；普通冲突审核可省略。 */
+  baseFingerprint?: string;
 }
 
 interface ReviewRow {
@@ -148,6 +178,12 @@ interface ReviewRow {
   target_title: string | null;
   target_body: string | null;
   similarity: number | null;
+  target_current_title: string | null;
+  target_type: string | null;
+  target_description: string | null;
+  target_category: string | null;
+  target_tags: string[] | null;
+  target_status: string | null;
   score: number | null;
   reason: string | null;
   resolved_action: string | null;
@@ -157,6 +193,19 @@ interface ReviewRow {
 }
 
 function toItem(row: ReviewRow): ReviewItem {
+  const payload = normalizePayload(row.payload);
+  const hasTargetSnapshot = row.target_type !== null && row.target_body !== null;
+  const targetFingerprint = hasTargetSnapshot
+    ? reviewTargetFingerprint({
+        type: row.target_type ?? "",
+        title: row.target_current_title ?? "",
+        description: row.target_description,
+        category: row.target_category,
+        tags: row.target_tags ?? [],
+        status: row.target_status ?? "",
+        body: row.target_body ?? "",
+      })
+    : null;
   return {
     id: row.id,
     kind: isReviewKind(row.kind) ? row.kind : "near_duplicate",
@@ -165,11 +214,14 @@ function toItem(row: ReviewRow): ReviewItem {
       : "api",
     status: row.status === "resolved" ? "resolved" : "pending",
     title: row.title,
-    payload: normalizePayload(row.payload),
+    payload,
     targetConceptId: row.target_concept_id,
     targetTitle: row.target_title,
     targetBody: row.target_body,
     similarity: row.similarity,
+    stale: payload.baseFingerprint
+      ? targetFingerprint === null || targetFingerprint !== payload.baseFingerprint
+      : false,
     score: row.score,
     reason: row.reason,
     resolvedAction: isReviewAction(row.resolved_action) ? row.resolved_action : null,
@@ -185,6 +237,9 @@ const SELECT_ITEM = `
   SELECT r.id, r.kind, r.source, r.status, r.title, r.payload,
          r.target_concept_id, r.target_title, r.similarity, r.score, r.reason,
          r.resolved_action, r.resolved_concept_id, r.resolved_at, r.created_at,
+         c.title AS target_current_title, c.type AS target_type,
+         c.description AS target_description, c.category AS target_category,
+         c.tags AS target_tags, c.status AS target_status,
          v.body_markdown AS target_body
     FROM review_items r
     LEFT JOIN concepts c ON c.id = r.target_concept_id
@@ -199,7 +254,10 @@ export async function enqueueReview(
   user: ScopeUser,
   input: EnqueueReviewInput,
 ): Promise<string | null> {
-  const payload: ReviewPayload = normalizePayload(input.payload);
+  const normalized = normalizePayload(input.payload);
+  const payload: ReviewPayload = input.baseFingerprint
+    ? { ...normalized, baseFingerprint: input.baseFingerprint }
+    : normalized;
   const contentHash = sha256Hex(input.payload.body);
   const { rows } = await query<{ id: string }>(
     `INSERT INTO review_items
@@ -279,7 +337,12 @@ export type ResolveReviewResult =
   | {
       ok: false;
       reason:
-        "not-found" | "already-resolved" | "target-missing" | "target-out-of-scope" | "empty-body";
+        | "not-found"
+        | "already-resolved"
+        | "target-missing"
+        | "target-out-of-scope"
+        | "target-changed"
+        | "empty-body";
     };
 
 export interface ResolveReviewOptions {
@@ -315,6 +378,23 @@ export async function resolveReview(
     if (!item.targetConceptId) return { ok: false, reason: "target-missing" };
     const target = await getConceptDetail(item.targetConceptId, user);
     if (!target) return { ok: false, reason: "target-out-of-scope" };
+    if (target.deleted_at) return { ok: false, reason: "target-missing" };
+    const currentVersion = target.versions.find((version) => version.version_number === target.current_version);
+    if (!currentVersion) return { ok: false, reason: "target-missing" };
+    if (item.kind === "quality_risk" && item.payload.baseFingerprint) {
+      const currentFingerprint = reviewTargetFingerprint({
+        type: target.type,
+        title: target.title,
+        description: target.description ?? undefined,
+        category: target.category ?? undefined,
+        tags: target.tags,
+        status: target.status,
+        body: currentVersion.body_markdown,
+      });
+      if (currentFingerprint !== item.payload.baseFingerprint) {
+        return { ok: false, reason: "target-changed" };
+      }
+    }
     // 元数据沿用候选内容（采纳新内容就是采纳它的标题/分类/标签），
     // 唯一例外是 merged 允许改正文——标题合并的语义留给用户下一次编辑。
     const saved = await addConceptVersion(

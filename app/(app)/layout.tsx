@@ -14,6 +14,7 @@ const baseLinks = [
   { href: "/stats", label: "统计" },
   { href: "/logs", label: "记录" },
   { href: "/trash", label: "回收站" },
+  { href: "/quality", label: "质检" },
   { href: "/reviews", label: "审核" },
   // 版本排在「设置」之前：账户入口是靠 slice(0, -1) 插到最后一项前面的，
   // 把新项追加到末尾会让账户入口插错位置。
@@ -39,9 +40,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/90 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/90">
-        <div className="mx-auto flex h-14 w-full max-w-5xl items-center justify-between px-4">
+        <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between px-4">
           <nav className="flex items-center gap-1">
-            <span className="mr-2 font-semibold">知识库</span>
+            <span className="mr-2 shrink-0 whitespace-nowrap font-semibold">知识库</span>
             <NavLinks items={links} />
           </nav>
           <div className="flex items-center gap-1">

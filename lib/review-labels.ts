@@ -15,12 +15,14 @@ export const REVIEW_ACTION_LABEL: Record<string, string> = {
 export const REVIEW_KIND_LABEL: Record<string, string> = {
   conflict: "事实冲突",
   near_duplicate: "近似重复",
+  quality_risk: "质量风险",
 };
-
 export const REVIEW_SOURCE_LABEL: Record<string, string> = {
   ingest: "ingest",
   "okf-import": "OKF 导入",
   mcp: "Agent 写入",
   api: "API",
   claims: "Claim 审计",
+  "spot-check": "人工抽查",
+  "auto-review": "自动审阅",
 };

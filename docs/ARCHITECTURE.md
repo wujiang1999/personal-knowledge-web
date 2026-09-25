@@ -43,11 +43,11 @@ MCP 客户端（Claude/Codex，personal-wiki）──Bearer pkb_…──► htt
 
 | 层 | 位置 | 职责 |
 |---|---|---|
-| 页面 | `app/(app)/` | 13 个 Server Component 页面：dashboard / knowledge（列表+详情+新建）/ ask / sources / logs / trash / reviews / settings / users / stats / graph；另有 `/login` |
-| 客户端组件 | `components/`（23 个） | 表单、CodeMirror 编辑器、目录树、图谱（ECharts 动态导入）、快速切换器、版本历史、附件面板、账户控制台等 |
-| API | `app/api/`（31 个 route.ts） | 全部 JSON 接口；除 `/api/health` 外每个 handler 都过 `withRoute` + `requireApiUser` |
-| 领域库 | `lib/`（26 个模块） | CRUD/检索/鉴权/LLM/日志/导出等全部业务逻辑，页面与 API 共同复用 |
-| 数据 | `db/schema.sql` + `db/migrations/0001–0017` | 幂等基线 schema + 编号迁移 |
+| 页面 | `app/(app)/` | dashboard / knowledge（列表+详情+新建）/ quality / ask / sources / logs / trash / reviews / settings / users / stats / graph / version；另有 `/login` |
+| 客户端组件 | `components/` | 表单、CodeMirror 编辑器、目录树、图谱（ECharts 动态导入）、快速切换器、版本历史、附件面板、账户控制台、质检父组件及其人工抽查/自动审阅子组件等 |
+| API | `app/api/` | 全部 JSON 接口；除 `/api/health` 外每个 handler 都过 `withRoute` + `requireApiUser` |
+| 领域库 | `lib/` | CRUD/检索/鉴权/LLM/日志/导出/质检等全部业务逻辑，页面与 API 共同复用 |
+| 数据 | `db/schema.sql` + `db/migrations/0001–0023` | 幂等基线 schema + 编号迁移 |
 | 运维脚本 | `scripts/`（12 个） | migrate / seed / add-user / create-api-key / ingest / review / curate / claims / embed-backfill / audit-attachments / smoke-production / load-env |
 | 服务器侧纳管 | `server/`、`offsite/`、`Caddyfile`、`deploy.sh` | systemd 单元 drop-in、备份/恢复演练/告警脚本、异地拉取、Caddy 权威快照 —— 详见 DEPLOYMENT.md 目录映射 |
 
@@ -67,8 +67,8 @@ MCP 客户端（Claude/Codex，personal-wiki）──Bearer pkb_…──► htt
 | `attachments` | 附件元数据 | `storage_key`（服务端生成的磁盘文件名）、mime/size/hash；字节在磁盘 |
 | `api_keys` | 机器凭证 | `key_hash`（SHA-256 of `pkb_`+48hex），明文仅创建时返回一次；`revoked_at` |
 | `folders` | 空文件夹实体 | `(owner_id, path)` 唯一；可见树 = folders ∪ `concepts.category` 派生 |
-| `tasks` | 异步任务（迁移 0019） | `owner_id`、`kind`（ask / resummarize）、`status`（queued/running/done/failed）、`payload`/`result` jsonb、`error`、`attempts`、`started_at`/`finished_at`；**执行租约**：超期未结束的任务在读取时被判 failed（无 worker 的单实例取舍） |
-| `review_items` | 审核队列（迁移 0018） | `owner_id`、`kind`（conflict/near_duplicate）、`source`（ingest/okf-import/mcp/api/claims）、`status`、`payload` jsonb（候选全文）、`content_hash`、`target_concept_id`（ON DELETE SET NULL）+ `target_title` 快照、`similarity`/`score`/`reason`、`resolved_action`/`resolved_concept_id`/`resolved_at`；待裁决集合按 (owner, 目标, 哈希) 去重 |
+| `tasks` | 异步任务（迁移 0019） | `owner_id`、`kind`（ask / resummarize / auto-review）、`status`（queued/running/done/failed）、`payload`/`result` jsonb、`error`、`attempts`、`started_at`/`finished_at`；**执行租约**：超期未结束的任务在读取时被判 failed（无 worker 的单实例取舍） |
+| `review_items` | 审核队列（迁移 0018） | `owner_id`、`kind`（conflict/near_duplicate/quality_risk）、`source`（ingest/okf-import/mcp/api/claims/spot-check/auto-review）、`status`、`payload` jsonb（候选全文；质检候选含 `baseFingerprint`）、`content_hash`、`target_concept_id`（ON DELETE SET NULL）+ `target_title` 快照、`similarity`/`score`/`reason`、`resolved_action`/`resolved_concept_id`/`resolved_at`；待裁决集合按 (owner, 目标, 哈希) 去重 |
 | `search_logs` / `llm_calls` | 用量记录（/logs） | 均带 `api_key_id` 归因列；llm_calls 记录 kind/purpose/model/tokens/成败 |
 | `request_log` | 流量日志（/stats） | 每个 API 响应一行（route/method/path/status/took_ms）；插入端 2% 概率清理 180 天前旧行 |
 | `concept_embeddings` | 语义向量（迁移 0013） | `PRIMARY KEY(concept_id)`、`content_hash`+`model`（陈旧判定）、`vector` 维度在首次 backfill 时钉死并建 HNSW（cosine）索引；pgvector 缺失时迁移 NOTICE 跳过、不失败 |
@@ -84,6 +84,8 @@ MCP 客户端（Claude/Codex，personal-wiki）──Bearer pkb_…──► htt
 4. **owner 域**：所有读写按 `owner_id` 过滤，`admin` 角色全局绕过（`requireUser` 的
    `ScopeUser` 形状贯穿 lib 层）。文件夹是 category 的派生视图 + folders 实体，
    重命名/移动 = 前缀改写，删除 = 子树条目退回根目录（不删内容）。
+5. **质检批准不覆盖并发修改**：`quality_risk` 候选保存审阅时目标元数据+正文的稳定指纹；
+   裁决前重新计算当前指纹，不一致返回 `target-changed`，要求重新审阅。
 
 ## 四、检索管线（`lib/concepts.ts:searchConcepts`）
 
@@ -183,8 +185,10 @@ BM25F + embedding 混合，五级降级链，任何一级失败都退化而不�
 | `/api/trash` | GET, DELETE | 回收站列表 / 清空 |
 | `/api/reviews` | GET, POST | 审核队列列表（`?status=pending|resolved`）/ 入队（MCP 等进程外写路径用） |
 | `/api/reviews/[id]/resolve` | POST | 裁决：`action=kept_old|adopted_new|merged|kept_both`，写入走不可变版本路径 |
+| `/api/quality/spot-check` | GET | `?limit=1..5`，从当前账号有效条目随机返回抽查样本 |
+| `/api/quality/spot-check/report` | POST | 保存人工抽查问题为 `quality_risk` 待办；目标正文由服务端重读，不信任浏览器快照 |
 | `/api/ask` | POST | 知识问答入队（同一问题在飞行中则复用该任务），返回任务 id（202） |
-| `/api/tasks` | POST | 批量维护任务入队（`kind=resummarize`，同类在飞行中则复用），返回任务 id（202） |
+| `/api/tasks` | POST | 维护任务入队（`kind=resummarize|auto-review`，同类在飞行中则复用），返回任务 id（202） |
 | `/api/tasks` | GET | 任务历史（`?kind=&limit=&offset=`，owner 作用域；含运行中任务的进度 result） |
 | `/api/tasks/[id]` | GET | 单任务轮询：`queued|running|done|failed` + 结果 |
 | `/api/categories` | GET, POST | 文件夹树 / `op=create|rename|move|delete`（冲突 409） |
@@ -203,7 +207,7 @@ BM25F + embedding 混合，五级降级链，任何一级失败都退化而不�
 未知异常→带路由名日志的 JSON 500）；zod 400 留在各路由内联（需要请求特定消息）。
 `withRoute` 的 name 同时是 request_log 的 route 标签（`METHOD /api/...` 形态）。
 
-## 七、LLM 集成（`lib/llm.ts|semantic.ts|summary.ts|ingest.ts`）
+## 七、LLM 集成（`lib/llm.ts|semantic.ts|summary.ts|ingest.ts|quality-checks.ts`）
 
 无 SDK，就两个 OpenAI 兼容 POST（chat/completions、embeddings），配置缺省 = 功能关闭、
 调用方静默降级（`lib/config.ts` 全部返回 `null` 而非抛错）：
@@ -217,6 +221,7 @@ BM25F + embedding 混合，五级降级链，任何一级失败都退化而不�
 | `weekly-review` | `npm run review [--write]` | 近 N 天变更分组 + LLM 叙事 → 「每周回顾」条目（重跑出新版本） |
 | `resummarize` | `/settings`「维护」按钮（`POST /api/tasks`） | 批量补齐缺描述的条目：复用 `auto-summary` 的提示与写入路径（`purpose=auto-summary`），每条落一次进度；人工描述不覆盖、上限 50 条/次 |
 | `ask` | `POST /api/ask`（网页 /ask、MCP `kb_ask`） | 检索 top-k → 只依据资料作答 → `[n]` 引用解析成条目 id；`maxTokens:1200`、thinking 默认关；检索为空直接回「没检索到」不烧配额 |
+| `auto-review` | `/quality`「开始自动审阅」（`POST /api/tasks`） | 每次随机 1–5 条，逐条审阅并续任务租约；单条失败不抹掉整批。只接受含具体证据的风险，完整修订稿可选；超 12,000 字样本跳过，结果写 `review_items` 后等待用户批准，绝不直接写概念 |
 | `backfill` | `npm run db:embed-backfill` | 全量向量化 + 钉维度 + HNSW，幂等可重跑 |
 | `chat` | 供 MCP judge 等远端使用（经 `/api/logs/llm` 上报） | — |
 

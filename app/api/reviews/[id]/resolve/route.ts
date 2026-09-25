@@ -55,6 +55,12 @@ export const POST = withRoute(
         { status: 409 }
       );
     }
+    if (result.reason === "target-changed") {
+      return NextResponse.json(
+        { error: "目标条目在审阅后已发生变化，请重新运行审阅后再批准，避免覆盖新修改" },
+        { status: 409 }
+      );
+    }
     return NextResponse.json({ error: "目标条目不在当前账号范围内" }, { status: 403 });
   }
 );
