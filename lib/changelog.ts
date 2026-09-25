@@ -46,6 +46,21 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.3.1",
+    date: "2026-09-25",
+    title: "导航分组与响应式菜单整理",
+    changes: [
+      {
+        kind: "feature",
+        text: "将 13 个平铺入口收敛为概览、知识管理、智能工作流、数据与审计、系统管理五个一级入口；当前页面所属分组自动展开，其他分组按需折叠。",
+      },
+      {
+        kind: "feature",
+        text: "桌面与窄屏共用同一套纵向分组导航；审核待办会汇总到智能工作流父级，现有路由、激活态和徽标语义保持不变。",
+      },
+    ],
+  },
+  {
     version: "0.3.0",
     date: "2026-09-25",
     title: "知识质检、可调整侧栏与导航可见性修复",
