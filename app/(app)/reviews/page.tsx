@@ -17,7 +17,7 @@ export default async function ReviewsPage() {
   const [pending, resolved, pendingTotal] = await Promise.all([
     listReviewItems(user, { status: "pending", limit: PENDING_LIMIT }),
     listReviewItems(user, { status: "resolved", limit: 20 }),
-    countReviewItems(user, "pending"),
+    countReviewItems(user, { status: "pending" }),
   ]);
 
   const cards: ReviewCardItem[] = pending.map((item) => ({

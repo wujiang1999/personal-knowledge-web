@@ -287,30 +287,64 @@ export async function enqueueReview(
   return rows[0]?.id ?? null;
 }
 
+export interface ReviewListFilters {
+  status: ReviewStatus;
+  kind?: ReviewKind;
+  source?: ReviewSource;
+  limit?: number;
+  offset?: number;
+}
+
 export async function listReviewItems(
   user: ScopeUser,
-  opts: { status: ReviewStatus; limit?: number; offset?: number },
+  opts: ReviewListFilters,
 ): Promise<ReviewItem[]> {
   const limit = Math.min(Math.max(1, Math.trunc(opts.limit ?? 50)), 200);
   const offset = Math.max(0, Math.trunc(opts.offset ?? 0));
-  // 与 /logs、/stats 同一套 owner 作用域写法：admin 的空子句必须连参数一起
-  // 消失——留着不引用的 $n 会让 PG 报 42P18（could not determine data type）。
-  const scope = user.role === "admin" ? "" : "AND r.owner_id = $4";
-  const scopeParams = user.role === "admin" ? [] : [user.id];
+  const params: unknown[] = [opts.status];
+  const where = ["r.status = $1"];
+  if (opts.kind) {
+    params.push(opts.kind);
+    where.push(`r.kind = $${params.length}`);
+  }
+  if (opts.source) {
+    params.push(opts.source);
+    where.push(`r.source = $${params.length}`);
+  }
+  if (user.role !== "admin") {
+    params.push(user.id);
+    where.push(`r.owner_id = $${params.length}`);
+  }
+  params.push(limit, offset);
   const order = opts.status === "pending" ? "r.created_at DESC" : "r.resolved_at DESC NULLS LAST";
   const { rows } = await query<ReviewRow>(
-    `${SELECT_ITEM} WHERE r.status = $1 ${scope} ORDER BY ${order} LIMIT $2 OFFSET $3`,
-    [opts.status, limit, offset, ...scopeParams],
+    `${SELECT_ITEM} WHERE ${where.join(" AND ")} ORDER BY ${order} LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params,
   );
   return rows.map(toItem);
 }
 
-export async function countReviewItems(user: ScopeUser, status: ReviewStatus): Promise<number> {
-  const scope = user.role === "admin" ? "" : "AND owner_id = $2";
-  const scopeParams = user.role === "admin" ? [] : [user.id];
+export async function countReviewItems(
+  user: ScopeUser,
+  opts: Pick<ReviewListFilters, "status" | "kind" | "source">,
+): Promise<number> {
+  const params: unknown[] = [opts.status];
+  const where = ["status = $1"];
+  if (opts.kind) {
+    params.push(opts.kind);
+    where.push(`kind = $${params.length}`);
+  }
+  if (opts.source) {
+    params.push(opts.source);
+    where.push(`source = $${params.length}`);
+  }
+  if (user.role !== "admin") {
+    params.push(user.id);
+    where.push(`owner_id = $${params.length}`);
+  }
   const { rows } = await query<{ n: string }>(
-    `SELECT count(*)::text AS n FROM review_items WHERE status = $1 ${scope}`,
-    [status, ...scopeParams],
+    `SELECT count(*)::text AS n FROM review_items WHERE ${where.join(" AND ")}`,
+    params,
   );
   return Number(rows[0]?.n ?? 0);
 }
@@ -342,6 +376,7 @@ export type ResolveReviewResult =
         | "target-missing"
         | "target-out-of-scope"
         | "target-changed"
+        | "unsupported-action"
         | "empty-body";
     };
 
@@ -367,6 +402,9 @@ export async function resolveReview(
   const item = await getReviewItem(id, user);
   if (!item) return { ok: false, reason: "not-found" };
   if (item.status !== "pending") return { ok: false, reason: "already-resolved" };
+  if (item.kind === "quality_risk" && action === "kept_both") {
+    return { ok: false, reason: "unsupported-action" };
+  }
 
   const edited = typeof opts.body === "string" ? opts.body : null;
   const nextBody = (edited ?? item.payload.body).trim();

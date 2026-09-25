@@ -26,13 +26,15 @@ export const GET = withRoute("GET /api/concepts", async (req: Request) => {
     limitRaw === null ? 100 : Math.min(200, Math.max(1, Math.trunc(Number(limitRaw)) || 100));
   const offsetRaw = Number(url.searchParams.get("offset"));
   const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.trunc(offsetRaw)) : 0;
-  // `total` is the whole-scope count, not `concepts.length`: without it a
-  // caller cannot tell "this is the last page" from "there are more", and MCP
-  // clients resorted to speculative requests until an empty array came back.
-  // Same helper the web pager uses (app/(app)/knowledge/page.tsx).
+  const statusRaw = url.searchParams.get("status");
+  const status =
+    statusRaw === "draft" || statusRaw === "stable" || statusRaw === "deprecated"
+      ? statusRaw
+      : undefined;
+  const category = url.searchParams.get("category")?.trim().slice(0, 200) || undefined;
   const [concepts, total] = await Promise.all([
-    listConcepts({ user, limit, offset }),
-    countConcepts(user),
+    listConcepts({ user, status, category, limit, offset }),
+    countConcepts(user, category, status),
   ]);
   return NextResponse.json({ concepts, total });
 });

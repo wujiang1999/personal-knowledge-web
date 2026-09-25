@@ -175,7 +175,7 @@ BM25F + embedding 混合，五级降级链，任何一级失败都退化而不�
 | `/api/health` | GET | 免鉴权存活探针（`{ok,db}` + DB roundtrip），deploy/监控专用 |
 | `/api/auth/login|logout|change-password` | POST | 会话生命周期；改密强制全端下线重新登录；`/api/auth/expire` GET 清 Cookie |
 | `/api/me` | GET | 识别调用者（cookie 或 key）——`kb_whoami` 的落点 |
-| `/api/concepts` | GET, POST | 列表/创建（POST 正文全同 → 409 + `existingId/existingTitle`） |
+| `/api/concepts` | GET, POST | 列表（`category/status/limit/offset`，total 同步过滤）/ 创建（正文全同 → 409 + `existingId/existingTitle`） |
 | `/api/concepts/[id]` | GET, PATCH, DELETE | 详情（含版本）/ 存新版本（同哈希→元数据 only）/ 软删除，`?purge=1` 真删 |
 | `/api/concepts/[id]/restore` | POST | 回收站恢复 |
 | `/api/concepts/[id]/versions/[v]/restore` | POST | 版本回滚（生成新版本） |
@@ -183,8 +183,8 @@ BM25F + embedding 混合，五级降级链，任何一级失败都退化而不�
 | `/api/attachments/[id]` | GET, DELETE | 取字节（`?download=1` 强制下载；Range 支持音视频）/ 删 |
 | `/api/search` | GET | `?q=&limit=&offset=`，混合检索 |
 | `/api/trash` | GET, DELETE | 回收站列表 / 清空 |
-| `/api/reviews` | GET, POST | 审核队列列表（`?status=pending|resolved`）/ 入队（MCP 等进程外写路径用） |
-| `/api/reviews/[id]/resolve` | POST | 裁决：`action=kept_old|adopted_new|merged|kept_both`，写入走不可变版本路径 |
+| `/api/reviews` | GET, POST | 审核队列列表（`status/kind/source/limit/offset`）/ 入队（MCP 等进程外写路径用） |
+| `/api/reviews/[id]/resolve` | POST | 裁决：`action=kept_old|adopted_new|merged|kept_both`，写入走不可变版本路径；质检过期返回 `code=target-changed`，质量风险拒绝 `kept_both` |
 | `/api/quality/spot-check` | GET | `?limit=1..5`，从当前账号有效条目随机返回抽查样本 |
 | `/api/quality/spot-check/report` | POST | 保存人工抽查问题为 `quality_risk` 待办；目标正文由服务端重读，不信任浏览器快照 |
 | `/api/ask` | POST | 知识问答入队（同一问题在飞行中则复用该任务），返回任务 id（202） |

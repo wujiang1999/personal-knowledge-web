@@ -47,6 +47,14 @@ export const GET = withRoute("GET /api/reviews", async (req: Request) => {
   const status: ReviewStatus = (REVIEW_STATUSES as readonly string[]).includes(statusRaw)
     ? (statusRaw as ReviewStatus)
     : "pending";
+  const kindRaw = url.searchParams.get("kind");
+  const kind = (REVIEW_KINDS as readonly string[]).includes(kindRaw ?? "")
+    ? (kindRaw as ReviewKind)
+    : undefined;
+  const sourceRaw = url.searchParams.get("source");
+  const source = (REVIEW_SOURCES as readonly string[]).includes(sourceRaw ?? "")
+    ? (sourceRaw as ReviewSource)
+    : undefined;
   // Number(null) === 0 in JS: a missing ?limit must not become limit=1.
   const limitRaw = url.searchParams.get("limit");
   const limit = limitRaw === null ? 50 : Math.min(200, Math.max(1, Math.trunc(Number(limitRaw)) || 50));
@@ -54,8 +62,8 @@ export const GET = withRoute("GET /api/reviews", async (req: Request) => {
   const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.trunc(offsetRaw)) : 0;
 
   const [items, total] = await Promise.all([
-    listReviewItems(user, { status, limit, offset }),
-    countReviewItems(user, status),
+    listReviewItems(user, { status, kind, source, limit, offset }),
+    countReviewItems(user, { status, kind, source }),
   ]);
   return NextResponse.json({ items, total });
 });

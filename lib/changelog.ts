@@ -46,6 +46,25 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.3.3",
+    date: "2026-09-25",
+    title: "MCP 质检与列表筛选契约",
+    changes: [
+      {
+        kind: "feature",
+        text: "概念列表 API 新增 category/status 过滤，total 同步按过滤条件计算；MCP 可直接分页浏览指定目录或状态，不再拉取全库后自行筛选。",
+      },
+      {
+        kind: "feature",
+        text: "审核列表 API 新增 kind/source 过滤，MCP 可分别查看人工抽查、模型自动审阅及其它来源；过滤后的 total 与分页保持一致。",
+      },
+      {
+        kind: "security",
+        text: "质量风险禁止使用 kept_both 新建重复条目；目标在审阅后变化时返回结构化 target-changed，供客户端阻止陈旧建议覆盖新修改。",
+      },
+    ],
+  },
+  {
     version: "0.3.2",
     date: "2026-09-25",
     title: "统一页面标题与导航标签",

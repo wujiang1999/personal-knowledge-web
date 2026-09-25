@@ -55,9 +55,15 @@ export const POST = withRoute(
         { status: 409 }
       );
     }
+    if (result.reason === "unsupported-action") {
+      return NextResponse.json(
+        { error: "质量风险只能忽略、批准建议或编辑后保存，不能新建重复条目", code: "unsupported-action" },
+        { status: 409 }
+      );
+    }
     if (result.reason === "target-changed") {
       return NextResponse.json(
-        { error: "目标条目在审阅后已发生变化，请重新运行审阅后再批准，避免覆盖新修改" },
+        { error: "目标条目在审阅后已发生变化，请重新运行审阅后再批准，避免覆盖新修改", code: "target-changed" },
         { status: 409 }
       );
     }

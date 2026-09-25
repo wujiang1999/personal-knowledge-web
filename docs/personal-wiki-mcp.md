@@ -1,6 +1,6 @@
 # personal-wiki MCP integration
 
-## Current contract: v0.11.0 (2026-09-13), retrieval fields extended 2026-09-16
+## Current contract: Web v0.3.3 / MCP v0.12.0 (2026-09-25)
 
 - Search results carry `section` (the heading path a hit sits under, e.g.
   `第4章 > 4.2 检索`) alongside `score` and `similarity`. `score` is a BM25F
@@ -30,6 +30,12 @@
 - Model admission and task submission have server-side concurrency, rate, and
   token limits. HTTP 429 is actionable throttling; clients must not retry writes
   automatically. See `OPERATIONS.md` for defaults.
+- MCP 0.12.0 exposes 27 tools. New coverage includes `kb_spot_check`,
+  `kb_report_quality_issue`, and explicitly confirmed `kb_run_auto_review`, plus
+  attachment listing/deletion. `kb_list_concepts` accepts category/status;
+  `kb_list_reviews` accepts kind/source. Quality-risk resolution cannot create a
+  duplicate with `kept_both`, and stale approvals return structured
+  `target-changed` errors.
 
 The versioned sections below document historical behavior; this section
 supersedes their client-side LLM and automatic-merge descriptions.

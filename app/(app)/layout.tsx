@@ -42,7 +42,7 @@ const baseGroups: NavGroup[] = [
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
-  const pendingReviews = await countReviewItems(user, "pending");
+  const pendingReviews = await countReviewItems(user, { status: "pending" });
   const systemItems: NavItem[] = [
     ...(user.role === "admin" ? [{ href: "/users", label: "账户" }] : []),
     { href: "/settings", label: "设置" },
