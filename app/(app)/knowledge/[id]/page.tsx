@@ -50,7 +50,7 @@ export default async function ConceptDetailPage({
           </Link>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <h1 className="text-2xl font-semibold">{concept.title}</h1>
+          <h2 className="text-xl font-semibold">{concept.title}</h2>
           <span className="rounded bg-zinc-200 px-2 py-0.5 text-xs dark:bg-zinc-700">{concept.type}</span>
           <span className="rounded bg-zinc-200 px-2 py-0.5 text-xs dark:bg-zinc-700">{concept.status}</span>
           {concept.attachment_count > 0 && (

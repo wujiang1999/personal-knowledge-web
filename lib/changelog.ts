@@ -46,6 +46,21 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.3.2",
+    date: "2026-09-25",
+    title: "统一页面标题与导航标签",
+    changes: [
+      {
+        kind: "feature",
+        text: "所有子页面顶部新增统一页面标题，并直接复用侧边栏同一份标签数据；图谱、来源、审核、问答等页面不再维护容易漂移的独立标题文字。",
+      },
+      {
+        kind: "feature",
+        text: "知识列表、新建与详情子路由统一显示“知识”，详情中的具体知识名称保留为内容标题；桌面与窄屏遵循相同规则。",
+      },
+    ],
+  },
+  {
     version: "0.3.1",
     date: "2026-09-25",
     title: "导航分组与响应式菜单整理",

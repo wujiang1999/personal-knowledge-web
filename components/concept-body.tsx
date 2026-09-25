@@ -73,7 +73,15 @@ function MarkdownChunk({ body, titleToId }: { body: string; titleToId: Map<strin
     <ReactMarkdown
       remarkPlugins={remarkPlugins}
       rehypePlugins={rehypePlugins}
-      components={{ a: renderAFor(titleToId) }}
+      components={{
+        a: renderAFor(titleToId),
+        h1: "h2",
+        h2: "h3",
+        h3: "h4",
+        h4: "h5",
+        h5: "h6",
+        h6: "h6",
+      }}
       urlTransform={urlTransform}
     >
       {normalizeMathDelimiters(embedWikiLinks(body))}

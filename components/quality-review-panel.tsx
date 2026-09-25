@@ -19,7 +19,6 @@ export function QualityReviewPanel({
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold">知识质检</h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">用人工抽查发现上下文问题，用模型审阅扩大样本覆盖。两者共用审核队列，任何内容修改都需明确批准并保留版本历史。</p>
       </header>
       <SpotCheckPanel initialSamples={initialSamples} />

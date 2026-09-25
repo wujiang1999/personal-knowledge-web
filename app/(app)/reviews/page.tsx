@@ -40,7 +40,6 @@ export default async function ReviewsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">审核队列</h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
           写路径拦下的内容与知识质检风险都在这里等人工裁决：近似重复、同名异内容、agent 判出的冲突，以及人工/模型发现的质量问题。
           采用建议或保存人工修订都会生成可回滚的新版本；保留旧内容只结案，冲突候选也可分别保留。

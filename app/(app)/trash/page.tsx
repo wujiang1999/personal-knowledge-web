@@ -14,7 +14,6 @@ export default async function TrashPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold">回收站</h1>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
             删除的知识先进入这里（搜索、列表、图谱与导出不再包含它们）；「彻底删除」才会永久清除全部版本与附件。
           </p>

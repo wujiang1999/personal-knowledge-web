@@ -24,7 +24,6 @@ export default async function AskPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">知识问答</h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
           基于库内条目的检索增强问答：先混合检索（BM25 + 语义），再让模型**只依据检索结果**作答，
           每条结论标出 [n] 来源编号。检索不到就直说，不会编。

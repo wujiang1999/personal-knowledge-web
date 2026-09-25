@@ -4,6 +4,7 @@ import { LogoutButton } from "@/components/logout-button";
 import { GroupedNavLinks, type NavGroup, type NavItem } from "@/components/nav-links";
 import { ResizableAppShell } from "@/components/resizable-sidebar";
 import { QuickSwitcher } from "@/components/quick-switcher";
+import { PageTitle } from "@/components/page-title";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 const overview: NavItem = { href: "/dashboard", label: "概览" };
@@ -87,7 +88,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             <GroupedNavLinks overview={overview} groups={groups} />
           </nav>
         </header>
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 md:px-8">{children}</main>
+        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 md:px-8">
+          <PageTitle overview={overview} groups={groups} />
+          {children}
+        </main>
       </div>
     </ResizableAppShell>
   );

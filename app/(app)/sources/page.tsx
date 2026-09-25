@@ -53,7 +53,6 @@ export default async function SourcesPage({
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">原始来源</h1>
       <p className="text-sm text-zinc-500 dark:text-zinc-400">
         每次知识录入的原始输入都会保留，用于可追溯与去重（各显示最新 200 条，{filterLabel ?? "无时间筛选"}）。
       </p>

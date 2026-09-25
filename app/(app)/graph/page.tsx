@@ -5,7 +5,6 @@ export default async function GraphPage() {
   await requireUser();
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">知识图谱</h1>
       <p className="text-sm text-zinc-500 dark:text-zinc-400">
         节点为条目（按目录着色，大小按连接数），连线为{" "}
         <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">[[双向链接]]</code>
