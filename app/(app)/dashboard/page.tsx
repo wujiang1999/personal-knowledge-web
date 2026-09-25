@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/requireUser";
-import { listConcepts, listSources, listFolders, buildCategoryTree, type CategoryTreeNode } from "@/lib/concepts";
+import { listConcepts, countSources, listFolders, buildCategoryTree, type CategoryTreeNode } from "@/lib/concepts";
+import { countReviewItems } from "@/lib/reviews";
 import { getLibraryHealth } from "@/lib/stats";
 import { DirectoryTree, type DirectoryTreeFolder } from "@/components/directory-tree";
 
@@ -21,18 +22,22 @@ function toFolder(node: CategoryTreeNode): DirectoryTreeFolder {
 
 export default async function DashboardPage() {
   const user = await requireUser();
-  const [allConcepts, sources, folderPaths, health] = await Promise.all([
+  const [allConcepts, sources, folderPaths, health, pendingReviews, qualityRisks] = await Promise.all([
     listConcepts({ user }),
-    listSources(user),
+    countSources(user),
     listFolders(user),
     getLibraryHealth(user),
+    countReviewItems(user, { status: "pending" }),
+    countReviewItems(user, { status: "pending", kind: "quality_risk" }),
   ]);
   // listConcepts orders by updated_at DESC, so the top 10 are the most recent.
   const recent = allConcepts.slice(0, 10);
 
-  const stats: { label: string; value: string | number; hint?: string }[] = [
-    { label: "知识条目", value: allConcepts.length },
-    { label: "原始来源", value: sources.length },
+  const stats: { label: string; value: string | number; hint?: string; href: string }[] = [
+    { label: "知识条目", value: allConcepts.length, href: "/knowledge" },
+    { label: "原始来源", value: sources, href: "/sources" },
+    { label: "待审阅", value: pendingReviews, hint: "进入审核", href: "/reviews" },
+    { label: "质量风险", value: qualityRisks, hint: "抽查与自动审阅", href: "/reviews?kind=quality_risk" },
     // Library-wide ops tiles (admin only — getLibraryHealth is null otherwise).
     ...(health
       ? [
@@ -40,8 +45,9 @@ export default async function DashboardPage() {
             label: "向量覆盖",
             value: `${health.embeddingCoverage}%`,
             hint: `${health.embeddingRows}/${health.conceptsTotal}${health.embeddingStale > 0 ? `，陈旧 ${health.embeddingStale}` : ""}`,
+            href: "/stats",
           },
-          { label: "回收站", value: String(health.trashTotal), hint: "待清理" },
+          { label: "回收站", value: String(health.trashTotal), hint: "待清理", href: "/trash" },
         ]
       : []),
   ];
@@ -52,13 +58,17 @@ export default async function DashboardPage() {
     <div className="space-y-8">
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         {stats.map((s) => (
-          <div key={s.label} className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <Link
+            key={s.label}
+            href={s.href}
+            className="rounded-lg border border-zinc-200 bg-white p-4 hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700"
+          >
             <div className="text-3xl font-semibold">{s.value}</div>
             <div className="text-sm text-zinc-500 dark:text-zinc-400">
               {s.label}
               {s.hint && <span className="ml-1 text-xs text-zinc-400 dark:text-zinc-500">{s.hint}</span>}
             </div>
-          </div>
+          </Link>
         ))}
         <Link
           href="/knowledge/new"

@@ -5,7 +5,6 @@ import { countConcepts, listConcepts, searchConcepts, type Concept } from "@/lib
 /** Page-size options for the knowledge list (selectable per request via the
  * `per` searchParam; 20 keeps URL cleanup when unset). */
 const PER_OPTIONS = [20, 50, 100];
-const DATELESS = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Pager items: all page numbers when the list is short, otherwise a window
  * around the current page with the first/last pinned ("1 … 4 5 6 … 12"). */
@@ -26,13 +25,26 @@ function pagerItems(page: number, totalPages: number): (number | "…")[] {
 export default async function KnowledgePage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; category?: string; page?: string; per?: string }>;
+  searchParams: Promise<{ q?: string; category?: string; status?: string; page?: string; per?: string }>;
 }) {
   const user = await requireUser();
-  const { q, category, page: pageParam, per: perParam } = await searchParams;
+  const { q, category, status: statusRaw, page: pageParam, per: perParam } = await searchParams;
   const query = q?.trim();
+  const categoryFilter = category?.trim() || undefined;
+  const status = statusRaw === "draft" || statusRaw === "stable" || statusRaw === "deprecated"
+    ? statusRaw
+    : undefined;
   const page = Math.max(1, Number(pageParam) || 1);
   const per = PER_OPTIONS.includes(Number(perParam)) ? Number(perParam) : PER_OPTIONS[0];
+  let effectiveQuery = query;
+  if (query) {
+    const queryWithFilters = [query];
+    if (categoryFilter && !/\bcategory:/.test(query)) {
+      queryWithFilters.push(`category:${JSON.stringify(categoryFilter)}`);
+    }
+    if (status && !/\bstatus:/.test(query)) queryWithFilters.push(`status:${status}`);
+    effectiveQuery = queryWithFilters.join(" ");
+  }
 
   let results: (Concept & { body_markdown?: string })[];
   let total: number | null = null;
@@ -40,7 +52,7 @@ export default async function KnowledgePage({
   if (query) {
     // Ranked search, paginated the same way as the list view; the query also
     // returns the total match count for the pager.
-    const { results: r, total: t } = await searchConcepts(user, query, per, (page - 1) * per, "ui");
+    const { results: r, total: t } = await searchConcepts(user, effectiveQuery!, per, (page - 1) * per, "ui");
     results = r;
     total = t;
     hasMore = page * per < t;
@@ -49,7 +61,8 @@ export default async function KnowledgePage({
     // pager needs the exact total, which countConcepts provides cheaply.
     const fetched = await listConcepts({
       user,
-      category: category?.trim() || undefined,
+      category: categoryFilter,
+      status,
       limit: per + 1,
       offset: (page - 1) * per,
     });
@@ -57,7 +70,7 @@ export default async function KnowledgePage({
     results = fetched.slice(0, per);
   }
   if (total === null) {
-    total = await countConcepts(user, category?.trim() || undefined);
+    total = await countConcepts(user, categoryFilter, status);
   }
   const totalPages = Math.max(1, Math.ceil(total / per));
 
@@ -66,6 +79,7 @@ export default async function KnowledgePage({
     if (query) sp.set("q", query);
     if (category) sp.set("category", category);
     if (per !== PER_OPTIONS[0]) sp.set("per", String(per));
+    if (status) sp.set("status", status);
     if (p > 1) sp.set("page", String(p));
     const s = sp.toString();
     return s ? `/knowledge?${s}` : "/knowledge";
@@ -75,6 +89,7 @@ export default async function KnowledgePage({
     const sp = new URLSearchParams();
     if (query) sp.set("q", query);
     if (category) sp.set("category", category);
+    if (status) sp.set("status", status);
     if (option !== PER_OPTIONS[0]) sp.set("per", String(option));
     const s = sp.toString();
     return s ? `/knowledge?${s}` : "/knowledge";
@@ -92,13 +107,24 @@ export default async function KnowledgePage({
             placeholder="搜索…支持 tag: category: status: type: 算子"
             className="w-full max-w-md rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500"
           />
+          <select
+            name="status"
+            defaultValue={status ?? ""}
+            aria-label="条目状态"
+            className="rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm text-zinc-600 outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+          >
+            <option value="">全部状态</option>
+            <option value="draft">草稿</option>
+            <option value="stable">稳定</option>
+            <option value="deprecated">已废弃</option>
+          </select>
           <button
             type="submit"
             className="rounded-md bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
             搜索
           </button>
-          {query && (
+          {(query || categoryFilter || status) && (
             <Link
               href="/knowledge"
               className="rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
@@ -120,12 +146,14 @@ export default async function KnowledgePage({
           “{query}” 的搜索结果：{total ?? results.length} 条 · 共 {totalPages} 页
         </p>
       )}
-      {!query && category && (
+      {!query && (categoryFilter || status) && (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          目录 {category}：共 {total} 条 · 共 {totalPages} 页
+          {categoryFilter ? `目录 ${categoryFilter}` : "全部目录"}
+          {status ? ` · 状态 ${status === "draft" ? "草稿" : status === "stable" ? "稳定" : "已废弃"}` : ""}
+          ：共 {total} 条 · 共 {totalPages} 页
         </p>
       )}
-      {!query && !category && (
+      {!query && !categoryFilter && !status && (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
           共 {total} 条 · 共 {totalPages} 页
         </p>
@@ -151,7 +179,7 @@ export default async function KnowledgePage({
       <ul className="divide-y rounded-lg border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
         {results.length === 0 && (
           <li className="px-4 py-8 text-center text-sm text-zinc-400 dark:text-zinc-500">
-            {query ? "没有匹配的结果" : category ? "该目录下还没有知识" : "还没有知识条目，点击「新建」开始"}
+            {query ? "没有匹配的结果" : categoryFilter || status ? "当前筛选下还没有知识" : "还没有知识条目，点击「新建」开始"}
           </li>
         )}
         {results.map((c) => (

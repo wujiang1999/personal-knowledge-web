@@ -1390,6 +1390,20 @@ export async function listSources(user: ScopeUser, filter?: LogFilter): Promise<
   return rows;
 }
 
+/** Total source records in the same owner/time scope as listSources. */
+export async function countSources(user: ScopeUser, filter?: LogFilter): Promise<number> {
+  const params: unknown[] = [];
+  const where = logWhereClause("c.owner_id", "s.created_at", user, filter, params);
+  const { rows } = await query<{ n: number }>(
+    `SELECT count(*)::int AS n
+     FROM sources s
+     JOIN concepts c ON c.id = s.concept_id
+     ${where}`,
+    params,
+  );
+  return rows[0]?.n ?? 0;
+}
+
 export interface ExportConcept {
   id: string;
   type: string;

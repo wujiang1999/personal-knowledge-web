@@ -21,18 +21,37 @@ export function QuickSwitcher() {
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const fetchedAt = useRef(0);
+  const [loadError, setLoadError] = useState(false);
 
-  const fetchItems = useCallback((force = false) => {
+  const fetchItems = useCallback(async (force = false) => {
     if (!force && Date.now() - fetchedAt.current < 30_000) return;
-    fetch("/api/concepts?limit=200")
-      .then((r) => (r.ok ? r.json() : { concepts: [] }))
-      .then((d: { concepts?: { id: string; title: string; category?: string | null }[] }) => {
-        setItems(
-          (d.concepts ?? []).map((c) => ({ id: c.id, title: c.title, category: c.category ?? null }))
-        );
-        fetchedAt.current = Date.now();
-      })
-      .catch(() => {});
+    try {
+      const all: TitleItem[] = [];
+      let offset = 0;
+      let total = 0;
+      do {
+        const response = await fetch(`/api/concepts?limit=200&offset=${offset}`);
+        if (!response.ok) throw new Error("quick switcher request failed");
+        const data = (await response.json()) as {
+          concepts?: { id: string; title: string; category?: string | null }[];
+          total?: number;
+        };
+        const page = (data.concepts ?? []).map((item) => ({
+          id: item.id,
+          title: item.title,
+          category: item.category ?? null,
+        }));
+        all.push(...page);
+        offset += page.length;
+        total = data.total ?? all.length;
+        if (page.length === 0) break;
+      } while (offset < total);
+      setItems(all);
+      setLoadError(false);
+      fetchedAt.current = Date.now();
+    } catch {
+      setLoadError(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -44,7 +63,7 @@ export function QuickSwitcher() {
           if (next) {
             setQ("");
             setSel(0);
-            fetchItems();
+            void fetchItems();
           }
           return next;
         });
@@ -90,7 +109,7 @@ export function QuickSwitcher() {
           setOpen(true);
           setQ("");
           setSel(0);
-          fetchItems(true);
+          void fetchItems(true);
         }}
         className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
         title="快速跳转 (Ctrl+K)"
@@ -111,7 +130,7 @@ export function QuickSwitcher() {
                 setSel(0);
               }}
               onKeyDown={(e) => {
-                if (e.key === "ArrowDown") {
+                if (e.key === "ArrowDown" && filtered.length > 0) {
                   e.preventDefault();
                   setSel((s) => Math.min(s + 1, filtered.length - 1));
                 } else if (e.key === "ArrowUp") {
@@ -126,9 +145,8 @@ export function QuickSwitcher() {
               className="w-full border-b border-zinc-200 bg-transparent px-4 py-3 text-sm outline-none dark:border-zinc-700"
             />
             <ul className="max-h-80 overflow-auto">
-              {filtered.length === 0 && (
-                <li className="px-4 py-3 text-sm text-zinc-400 dark:text-zinc-500">无匹配条目</li>
-              )}
+              {loadError && <li className="px-4 py-3 text-sm text-red-600 dark:text-red-400">快速跳转加载失败，请稍后重试</li>}
+              {!loadError && filtered.length === 0 && <li className="px-4 py-3 text-sm text-zinc-400 dark:text-zinc-500">无匹配条目</li>}
               {filtered.map((c, i) => (
                 <li key={c.id}>
                   <button
@@ -150,6 +168,11 @@ export function QuickSwitcher() {
                 </li>
               ))}
             </ul>
+            {!loadError && items.length > 0 && (
+              <div className="border-t border-zinc-200 px-4 py-2 text-xs text-zinc-400 dark:border-zinc-700 dark:text-zinc-500">
+                已加载全部 {items.length} 条知识
+              </div>
+            )}
           </div>
         </div>
       )}

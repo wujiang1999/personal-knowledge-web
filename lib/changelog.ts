@@ -46,6 +46,29 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.3.4",
+    date: "2026-09-25",
+    title: "核心列表与治理入口优化",
+    changes: [
+      {
+        kind: "feature",
+        text: "知识列表新增状态筛选，并确保分类条件在关键词搜索时继续生效；筛选、每页条数和分页链接统一保留条件，清除按钮可一次退出全部筛选。",
+      },
+      {
+        kind: "feature",
+        text: "审核队列新增风险类型与来源筛选，待裁决和已裁决记录使用同一条件；概览增加可点击的待审阅与质量风险统计。",
+      },
+      {
+        kind: "fix",
+        text: "Ctrl/Cmd+K 快速跳转改为分页加载全部知识而非仅最近 200 条，并在加载失败时显示错误与完整数量，避免静默给出不完整结果。",
+      },
+      {
+        kind: "fix",
+        text: "概览的原始来源统计改用数据库总数，不再把来源列表的 200 条展示上限误当成真实总量。",
+      },
+    ],
+  },
+  {
     version: "0.3.3",
     date: "2026-09-25",
     title: "MCP 质检与列表筛选契约",
