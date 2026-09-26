@@ -124,7 +124,7 @@ export function ApiKeysPanel({ initial }: { initial: ApiKeyItem[] }) {
         <button
           type="submit"
           disabled={busy}
-          className="rounded-md bg-brand-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-50 dark:bg-brand-300 dark:text-brand-950"
+          className="rounded-md bg-brand-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
         >
           生成新密钥
         </button>

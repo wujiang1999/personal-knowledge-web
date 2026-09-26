@@ -42,6 +42,17 @@ html.dark .app-scrollbar::-webkit-scrollbar-thumb {
 @layer base {
   :root {
     color-scheme: light;
+    --neutral-50: 246 248 248;
+    --neutral-100: 237 241 241;
+    --neutral-200: 221 229 228;
+    --neutral-300: 195 206 204;
+    --neutral-400: 137 155 152;
+    --neutral-500: 95 116 112;
+    --neutral-600: 74 94 90;
+    --neutral-700: 55 74 70;
+    --neutral-800: 38 55 51;
+    --neutral-900: 25 40 36;
+    --neutral-950: 16 27 24;
     --surface: #fff;
     --surface-border: #dde5e4;
     --accent: #1c5d4f;
@@ -49,10 +60,21 @@ html.dark .app-scrollbar::-webkit-scrollbar-thumb {
   }
   html.dark {
     color-scheme: dark;
-    --surface: #192824;
-    --surface-border: #2b3d37;
-    --accent: #7dc8b3;
-    --muted-surface: #213b32;
+    --neutral-50: 250 250 250;
+    --neutral-100: 244 244 245;
+    --neutral-200: 228 228 231;
+    --neutral-300: 212 212 216;
+    --neutral-400: 161 161 170;
+    --neutral-500: 113 113 122;
+    --neutral-600: 82 82 91;
+    --neutral-700: 63 63 70;
+    --neutral-800: 39 39 42;
+    --neutral-900: 24 24 27;
+    --neutral-950: 9 9 11;
+    --surface: #18181b;
+    --surface-border: #303036;
+    --accent: #b5c8c3;
+    --muted-surface: #262629;
   }
   body {
     line-height: 1.6;
@@ -123,6 +145,10 @@ html.dark .app-scrollbar::-webkit-scrollbar-thumb {
     background: #1c5d4f;
     color: #fff;
   }
+  .dark .brand-mark {
+    background: #303438;
+    color: #e4e4e7;
+  }
   .skip-link {
     position: fixed;
     top: 8px;
@@ -163,15 +189,15 @@ html.dark .app-scrollbar::-webkit-scrollbar-thumb {
     font-weight: 600;
   }
   .dark .nav-link {
-    color: #a9bcb5;
+    color: #a1a1aa;
     background: transparent;
     border-color: transparent;
   }
   .dark .nav-link:hover,
   .dark .nav-link[aria-current="page"] {
-    color: #a4dfcb;
-    background: #243f34;
-    border-color: #365346;
+    color: #f4f4f5;
+    background: #27272a;
+    border-color: #3f3f46;
   }
   .nav-group,
   .dark .nav-group {
@@ -185,7 +211,7 @@ html.dark .app-scrollbar::-webkit-scrollbar-thumb {
     letter-spacing: 0.07em;
   }
   .dark .nav-group {
-    color: #91aaa1;
+    color: #a1a1aa;
   }
   .nav-group:hover {
     color: var(--accent);
@@ -199,8 +225,8 @@ html.dark .app-scrollbar::-webkit-scrollbar-thumb {
     border-radius: 20px;
   }
   .dark .dashboard-hero {
-    border-color: #345546;
-    background: #203b30;
+    border-color: #303036;
+    background: #18181b;
   }
   .dashboard-stat {
     position: relative;

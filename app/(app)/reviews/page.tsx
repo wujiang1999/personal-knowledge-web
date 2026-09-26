@@ -80,7 +80,7 @@ export default async function ReviewsPage({
             {REVIEW_SOURCES.map((value) => <option key={value} value={value}>{REVIEW_SOURCE_LABEL[value]}</option>)}
           </select>
         </label>
-        <button type="submit" className="rounded-md bg-brand-700 px-3 py-2 text-sm text-white dark:bg-brand-300 dark:text-brand-950">筛选</button>
+        <button type="submit" className="rounded-md bg-brand-700 px-3 py-2 text-sm text-white dark:bg-zinc-100 dark:text-zinc-900">筛选</button>
         {(kind || source) && <Link href="/reviews" className="px-2 py-2 text-sm text-zinc-500 hover:underline dark:text-zinc-400">清除</Link>}
       </form>
 

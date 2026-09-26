@@ -82,7 +82,7 @@ export function AutoReviewPanel({
           <select value={size} onChange={(event) => setSize(Number(event.target.value))} disabled={running} className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-900" aria-label="自动审阅样本数">
             {[1, 3, 5].map((value) => <option key={value} value={value}>{value} 条</option>)}
           </select>
-          <button onClick={run} disabled={busy || running} className="rounded-md bg-brand-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 dark:bg-brand-300 dark:text-brand-950">
+          <button onClick={run} disabled={busy || running} className="rounded-md bg-brand-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900">
             {running ? "审阅中…" : busy ? "提交中…" : "开始自动审阅"}
           </button>
         </div>

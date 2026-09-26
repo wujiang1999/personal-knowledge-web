@@ -71,7 +71,7 @@ export function ResummarizeButton({ missing }: { missing: number }) {
       <button
         onClick={onRun}
         disabled={busy || missing === 0}
-        className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-60 dark:bg-brand-300 dark:text-brand-950 dark:hover:bg-brand-200"
+        className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
       >
         {busy ? "正在补齐…" : missing === 0 ? "没有缺失描述" : `补齐缺失描述（${missing} 条）`}
       </button>

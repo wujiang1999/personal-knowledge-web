@@ -121,7 +121,7 @@ export default async function KnowledgePage({
           </select>
           <button
             type="submit"
-            className="rounded-md bg-brand-700 px-4 py-2 text-sm text-white hover:bg-brand-800 dark:bg-brand-300 dark:text-brand-950 dark:hover:bg-brand-200"
+            className="rounded-md bg-brand-700 px-4 py-2 text-sm text-white hover:bg-brand-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
             搜索
           </button>
@@ -136,7 +136,7 @@ export default async function KnowledgePage({
         </form>
         <Link
           href="/knowledge/new"
-          className="shrink-0 rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800 dark:bg-brand-300 dark:text-brand-950 dark:hover:bg-brand-200"
+          className="shrink-0 rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
         >
           + 新建
         </Link>
@@ -168,7 +168,7 @@ export default async function KnowledgePage({
             href={perHref(option)}
             className={`rounded-md px-3 py-1.5 ${
               option === per
-                ? "bg-brand-700 text-white dark:bg-brand-300 dark:text-brand-950"
+                ? "bg-brand-700 text-white dark:bg-zinc-100 dark:text-zinc-900"
                 : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
             }`}
           >
@@ -236,7 +236,7 @@ export default async function KnowledgePage({
                   …
                 </span>
               ) : p === page ? (
-                <span key={p} className="rounded-md bg-brand-700 px-3 py-1.5 text-white dark:bg-brand-300 dark:text-brand-950">
+                <span key={p} className="rounded-md bg-brand-700 px-3 py-1.5 text-white dark:bg-zinc-100 dark:text-zinc-900">
                   {p}
                 </span>
               ) : (

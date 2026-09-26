@@ -124,7 +124,7 @@ export function SpotCheckPanel({ initialSamples }: { initialSamples: QualitySamp
                       {MANUAL_ISSUE_TYPES.map((type) => <option key={type} value={type}>{MANUAL_ISSUE_LABEL[type]}</option>)}
                     </select>
                     <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} maxLength={2000} placeholder="说明具体问题；后续可在审核页编辑正确内容。" className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900" />
-                    <button onClick={() => report(sample)} disabled={busyId === sample.id} className="rounded-md bg-brand-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 dark:bg-brand-300 dark:text-brand-950">
+                    <button onClick={() => report(sample)} disabled={busyId === sample.id} className="rounded-md bg-brand-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900">
                       {busyId === sample.id ? "提交中…" : "加入审核队列"}
                     </button>
                   </div>

@@ -163,7 +163,7 @@ export default async function LogsPage({
         href={href}
         className={`rounded-md px-3 py-1.5 text-sm ${
           active
-            ? "bg-brand-700 text-white dark:bg-brand-300 dark:text-brand-950"
+            ? "bg-brand-700 text-white dark:bg-zinc-100 dark:text-zinc-900"
             : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
         }`}
       >
@@ -205,7 +205,7 @@ export default async function LogsPage({
           defaultValue={date ?? ""}
           className="rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-800"
         />
-        <button type="submit" className="rounded-md bg-brand-700 px-3 py-1.5 text-white dark:bg-brand-300 dark:text-brand-950">
+        <button type="submit" className="rounded-md bg-brand-700 px-3 py-1.5 text-white dark:bg-zinc-100 dark:text-zinc-900">
           应用
         </button>
         {(date || daysParam) && (

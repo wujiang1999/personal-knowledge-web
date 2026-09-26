@@ -209,7 +209,7 @@ export default async function StatsPage({
               href={`/stats?days=${r}`}
               className={`rounded-md px-3 py-1.5 text-sm ${
                 r === days
-                  ? "bg-brand-700 text-white dark:bg-brand-300 dark:text-brand-950"
+                  ? "bg-brand-700 text-white dark:bg-zinc-100 dark:text-zinc-900"
                   : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
               }`}
             >

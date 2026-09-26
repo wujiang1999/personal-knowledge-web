@@ -59,13 +59,13 @@ export default async function DashboardPage() {
     <div className="space-y-7">
       <section className="dashboard-hero flex flex-col justify-between gap-6 p-6 sm:flex-row sm:items-center sm:p-7">
         <div>
-          <p className="mb-2 text-[10px] font-semibold tracking-[0.2em] text-brand-700 dark:text-brand-300">COLLECT · CONNECT · CREATE</p>
+          <p className="mb-2 text-[10px] font-semibold tracking-[0.2em] text-brand-700 dark:text-zinc-400">COLLECT · CONNECT · CREATE</p>
           <h2 className="text-xl font-semibold tracking-tight sm:text-2xl">把灵感，留给未来的自己。</h2>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">记录新的发现，连接已有知识，继续你的探索。</p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <Link href="/knowledge/new" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-brand-700 px-4 text-sm font-medium text-white hover:bg-brand-800 dark:bg-brand-300 dark:text-brand-950 dark:hover:bg-brand-200"><UiIcon name="plus" />新建知识</Link>
-          <Link href="/ask" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-brand-200 bg-white/60 px-4 text-sm font-medium text-brand-800 hover:bg-white dark:border-brand-700 dark:bg-brand-950/30 dark:text-brand-200 dark:hover:bg-brand-950"><UiIcon name="ask" />向知识库提问</Link>
+          <Link href="/knowledge/new" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-brand-700 px-4 text-sm font-medium text-white hover:bg-brand-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"><UiIcon name="plus" />新建知识</Link>
+          <Link href="/ask" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-brand-200 bg-white/60 px-4 text-sm font-medium text-brand-800 hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"><UiIcon name="ask" />向知识库提问</Link>
         </div>
       </section>
 

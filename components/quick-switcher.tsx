@@ -117,9 +117,9 @@ export function QuickSwitcher({ expanded = false }: { expanded?: boolean }) {
         }}
         className={`flex min-h-10 items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 text-xs text-zinc-500 hover:border-brand-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-400 ${expanded ? "w-full" : ""}`}
         aria-label="快速查找知识"
-        title="快速跳转 (Ctrl+K)"
+        title="快速查找知识"
       >
-        {expanded && <><UiIcon name="search" /><span className="flex-1 text-left">查找知识</span></>}<kbd className="text-[10px]">⌘ K</kbd>
+        <UiIcon name="search" />{expanded && <span className="flex-1 text-left">查找知识</span>}
       </button>
       {open && (
         <div className="fixed inset-0 z-50 bg-black/30" onClick={() => setOpen(false)}>

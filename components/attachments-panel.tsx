@@ -135,7 +135,7 @@ export function AttachmentsPanel({ conceptId }: { conceptId: string }) {
     <section className="ui-panel p-6">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="font-medium">附件</h2>
-        <label className="cursor-pointer rounded-md bg-brand-700 px-3 py-2 text-sm text-white hover:bg-brand-800 disabled:opacity-60 dark:bg-brand-300 dark:text-brand-950 dark:hover:bg-brand-200">
+        <label className="cursor-pointer rounded-md bg-brand-700 px-3 py-2 text-sm text-white hover:bg-brand-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300">
           {uploading ? (
             <span className="inline-flex items-center gap-2">
               <span

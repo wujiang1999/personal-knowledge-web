@@ -68,7 +68,7 @@ export function ChangePasswordForm() {
       <button
         type="submit"
         disabled={loading}
-        className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-60 dark:bg-brand-300 dark:text-brand-950 dark:hover:bg-brand-200"
+        className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
       >
         {loading ? "提交中…" : "修改密码"}
       </button>
