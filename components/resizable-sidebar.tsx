@@ -1,5 +1,9 @@
 "use client";
 
+import Link from "next/link";
+import { UiIcon } from "@/components/ui-icon";
+import { QuickSwitcher } from "@/components/quick-switcher";
+
 import {
   useEffect,
   useRef,
@@ -9,7 +13,7 @@ import {
   type ReactNode,
 } from "react";
 
-const SIDEBAR_DEFAULT_WIDTH = 240;
+const SIDEBAR_DEFAULT_WIDTH = 252;
 const SIDEBAR_MIN_WIDTH = 200;
 const SIDEBAR_MAX_WIDTH = 360;
 const SIDEBAR_KEYBOARD_STEP = 16;
@@ -91,19 +95,24 @@ export function ResizableAppShell({
 
   return (
     <div
-      className="relative min-h-screen md:grid"
+      className="app-shell relative min-h-screen md:grid"
       style={{ gridTemplateColumns: `${width}px minmax(0, 1fr)` }}
     >
+      <a href="#main-content" className="skip-link">跳转到主要内容</a>
       <aside
         aria-label="主导航"
         style={{ width }}
-        className="sticky top-0 hidden h-screen flex-col border-r border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 md:flex"
+        className="app-sidebar sticky top-0 hidden h-screen flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 md:flex"
       >
-        <div className="flex h-16 shrink-0 items-center px-5 text-lg font-semibold">知识库</div>
-        <nav className="app-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 py-3">
+        <Link href="/dashboard" className="flex shrink-0 items-center gap-3 px-5 py-7">
+          <span className="brand-mark"><UiIcon name="book" className="h-5 w-5" /></span>
+          <span><span className="block text-base font-semibold tracking-wide">知识库</span><span className="mt-0.5 block text-[10px] tracking-[0.18em] text-zinc-500 dark:text-zinc-400">PERSONAL KNOWLEDGE</span></span>
+        </Link>
+        <div className="px-4 pb-4"><QuickSwitcher expanded /></div>
+        <nav className="app-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto px-4 pb-5">
           {navigation}
         </nav>
-        <div className="shrink-0 border-t border-zinc-200 bg-white/70 p-3 dark:border-zinc-800 dark:bg-zinc-950/90">
+        <div className="shrink-0 border-t border-zinc-200 bg-white/70 p-4 dark:border-zinc-800 dark:bg-zinc-900">
           {footer}
         </div>
       </aside>

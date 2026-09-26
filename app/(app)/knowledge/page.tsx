@@ -97,15 +97,16 @@ export default async function KnowledgePage({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <form method="get" action="/knowledge" className="flex flex-1 gap-2">
+      <div className="ui-panel flex flex-wrap items-center justify-between gap-3 p-4">
+        <form method="get" action="/knowledge" className="flex min-w-0 flex-1 flex-wrap gap-2">
           {category && <input type="hidden" name="category" value={category} />}
           {per !== PER_OPTIONS[0] && <input type="hidden" name="per" value={per} />}
           <input
+            aria-label="搜索知识"
             name="q"
             defaultValue={query ?? ""}
             placeholder="搜索…支持 tag: category: status: type: 算子"
-            className="w-full max-w-md rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500"
+            className="min-w-0 w-full sm:w-auto sm:flex-1 rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500"
           />
           <select
             name="status"
@@ -120,7 +121,7 @@ export default async function KnowledgePage({
           </select>
           <button
             type="submit"
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+            className="rounded-md bg-brand-700 px-4 py-2 text-sm text-white hover:bg-brand-800 dark:bg-brand-300 dark:text-brand-950 dark:hover:bg-brand-200"
           >
             搜索
           </button>
@@ -135,7 +136,7 @@ export default async function KnowledgePage({
         </form>
         <Link
           href="/knowledge/new"
-          className="shrink-0 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+          className="shrink-0 rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800 dark:bg-brand-300 dark:text-brand-950 dark:hover:bg-brand-200"
         >
           + 新建
         </Link>
@@ -167,7 +168,7 @@ export default async function KnowledgePage({
             href={perHref(option)}
             className={`rounded-md px-3 py-1.5 ${
               option === per
-                ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                ? "bg-brand-700 text-white dark:bg-brand-300 dark:text-brand-950"
                 : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
             }`}
           >
@@ -176,16 +177,16 @@ export default async function KnowledgePage({
         ))}
       </div>
 
-      <ul className="divide-y rounded-lg border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
+      <ul className="divide-y ui-panel dark:divide-zinc-800">
         {results.length === 0 && (
           <li className="px-4 py-8 text-center text-sm text-zinc-400 dark:text-zinc-500">
             {query ? "没有匹配的结果" : categoryFilter || status ? "当前筛选下还没有知识" : "还没有知识条目，点击「新建」开始"}
           </li>
         )}
         {results.map((c) => (
-          <li key={c.id} className="px-4 py-3">
+          <li key={c.id} className="px-5 py-4 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
             <Link href={`/knowledge/${c.id}`} className="group block">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium group-hover:underline">{c.title}</span>
                 {c.category && <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">📁 {c.category}</span>}
                 <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">{c.type}</span>
@@ -235,7 +236,7 @@ export default async function KnowledgePage({
                   …
                 </span>
               ) : p === page ? (
-                <span key={p} className="rounded-md bg-zinc-900 px-3 py-1.5 text-white dark:bg-zinc-100 dark:text-zinc-900">
+                <span key={p} className="rounded-md bg-brand-700 px-3 py-1.5 text-white dark:bg-brand-300 dark:text-brand-950">
                   {p}
                 </span>
               ) : (

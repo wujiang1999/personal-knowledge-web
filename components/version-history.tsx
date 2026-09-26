@@ -62,7 +62,7 @@ export function VersionHistory({
   const hiddenCount = versions.length - visible.length;
   return (
     <div className="space-y-2">
-      <ul className="divide-y rounded-lg border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
+      <ul className="divide-y ui-panel dark:divide-zinc-800">
         {visible.map((v) => (
           <li key={v.id} className="px-4 py-2 text-sm">
             <div className="flex flex-wrap items-center gap-3">
@@ -112,7 +112,7 @@ export function VersionHistory({
       {hiddenCount > 0 && (
         <button
           onClick={() => setShowAll(true)}
-          className="w-full rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+          className="w-full ui-panel px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
           显示全部 {versions.length} 条版本（还有 {hiddenCount} 条更早的）
         </button>

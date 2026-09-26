@@ -3,7 +3,6 @@ import { countReviewItems } from "@/lib/reviews";
 import { LogoutButton } from "@/components/logout-button";
 import { GroupedNavLinks, type NavGroup, type NavItem } from "@/components/nav-links";
 import { ResizableAppShell } from "@/components/resizable-sidebar";
-import { QuickSwitcher } from "@/components/quick-switcher";
 import { PageTitle } from "@/components/page-title";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { MobileNavigation } from "@/components/mobile-navigation";
@@ -66,8 +65,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <ResizableAppShell
       navigation={<GroupedNavLinks overview={overview} groups={groups} />}
       footer={
-        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2">
-          <QuickSwitcher />
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-1">
           <span className="truncate text-sm text-zinc-600 dark:text-zinc-300">{user.username}</span>
           <ThemeToggle />
           <LogoutButton />
@@ -76,7 +74,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     >
       <div className="min-w-0">
         <MobileNavigation overview={overview} groups={groups} />
-        <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 md:px-8">
+        <main id="main-content" className="mx-auto w-full max-w-[1440px] flex-1 px-4 py-6 md:px-8 md:py-9 xl:px-12">
           <PageTitle overview={overview} groups={groups} />
           {children}
         </main>

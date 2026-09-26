@@ -11,7 +11,7 @@ const themeInitScript = `(function(){try{var t=localStorage.getItem('theme');var
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
-      <body className="min-h-screen bg-zinc-100 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">
+      <body className="font-sans min-h-screen bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         {children}
       </body>

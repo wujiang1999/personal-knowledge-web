@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { UiIcon } from "@/components/ui-icon";
 import { useRouter } from "next/navigation";
 
 interface TitleItem {
@@ -13,12 +14,13 @@ interface TitleItem {
  * jump. Titles are fetched once per open (30s client cache) and filtered
  * client-side — a personal KB is hundreds of rows, so zero server cost and
  * zero search-log pollution. */
-export function QuickSwitcher() {
+export function QuickSwitcher({ expanded = false }: { expanded?: boolean }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [items, setItems] = useState<TitleItem[]>([]);
   const [sel, setSel] = useState(0);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const fetchedAt = useRef(0);
   const [loadError, setLoadError] = useState(false);
@@ -56,6 +58,7 @@ export function QuickSwitcher() {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (!triggerRef.current?.getClientRects().length) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setOpen((o) => {
@@ -104,6 +107,7 @@ export function QuickSwitcher() {
   return (
     <>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => {
           setOpen(true);
@@ -111,14 +115,17 @@ export function QuickSwitcher() {
           setSel(0);
           void fetchItems(true);
         }}
-        className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+        className={`flex min-h-10 items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 text-xs text-zinc-500 hover:border-brand-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-400 ${expanded ? "w-full" : ""}`}
+        aria-label="快速查找知识"
         title="快速跳转 (Ctrl+K)"
       >
-        ⌘K
+        {expanded && <><UiIcon name="search" /><span className="flex-1 text-left">查找知识</span></>}<kbd className="text-[10px]">⌘ K</kbd>
       </button>
       {open && (
         <div className="fixed inset-0 z-50 bg-black/30" onClick={() => setOpen(false)}>
           <div
+            role="dialog"
+            aria-label="快速查找知识"
             className="mx-auto mt-20 w-[min(560px,92vw)] overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900"
             onClick={(e) => e.stopPropagation()}
           >

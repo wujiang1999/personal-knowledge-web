@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { GroupedNavLinks, type NavGroup, type NavItem } from "@/components/nav-links";
 import { QuickSwitcher } from "@/components/quick-switcher";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { UiIcon } from "@/components/ui-icon";
 import { LogoutButton } from "@/components/logout-button";
 
 export function MobileNavigation({
@@ -38,7 +39,7 @@ export function MobileNavigation({
               {open ? <path d="M5 5l14 14M19 5 5 19" /> : <path d="M4 7h16M4 12h16M4 17h16" />}
             </svg>
           </button>
-          <span className="truncate font-semibold">知识库</span>
+          <span className="flex items-center gap-2 truncate font-semibold"><UiIcon name="book" className="h-5 w-5 text-brand-600 dark:text-brand-300" />知识库</span>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <QuickSwitcher />

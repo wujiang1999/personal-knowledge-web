@@ -270,7 +270,7 @@ export function ConceptForm({
           </button>
         </p>
       )}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <label className={labelCls}>标题 *</label>
           <input name="title" required maxLength={200} defaultValue={initial?.title ?? ""} className={inputCls} />
@@ -290,7 +290,7 @@ export function ConceptForm({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <label className={labelCls}>标签（逗号分隔）</label>
           <input
@@ -380,7 +380,7 @@ export function ConceptForm({
         <button
           type="submit"
           disabled={loading}
-          className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+          className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-60 dark:bg-brand-300 dark:text-brand-950 dark:hover:bg-brand-200"
         >
           {loading ? "保存中…" : mode === "create" ? "创建" : "保存新版本"}
         </button>

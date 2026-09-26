@@ -1,5 +1,6 @@
 "use client";
 
+import { UiIcon } from "@/components/ui-icon";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { safeSameOriginPath } from "@/lib/publicUrl";
@@ -43,17 +44,18 @@ export function LoginForm({ next }: { next?: string }) {
   return (
     <form
       onSubmit={onSubmit}
-      className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
+      className="w-full max-w-sm ui-panel p-8 shadow-sm"
     >
-      <h1 className="mb-6 text-center text-xl font-semibold">知识库登录</h1>
+      <div className="mb-7 text-center"><span className="brand-mark mb-4"><UiIcon name="book" className="h-5 w-5" /></span><h1 className="text-2xl font-semibold tracking-tight">欢迎回到知识库</h1><p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">继续记录、连接与发现。</p></div>
       <div className="space-y-4">
         <div>
-          <label className="mb-1 block text-sm text-zinc-600 dark:text-zinc-300">用户名</label>
-          <input name="username" required autoComplete="username" className={inputCls} />
+          <label htmlFor="username" className="mb-1 block text-sm text-zinc-600 dark:text-zinc-300">用户名</label>
+          <input id="username" name="username" required autoComplete="username" className={inputCls} />
         </div>
         <div>
-          <label className="mb-1 block text-sm text-zinc-600 dark:text-zinc-300">密码</label>
+          <label htmlFor="password" className="mb-1 block text-sm text-zinc-600 dark:text-zinc-300">密码</label>
           <input
+            id="password"
             name="password"
             type="password"
             required
@@ -65,7 +67,7 @@ export function LoginForm({ next }: { next?: string }) {
         <button
           type="submit"
           disabled={loading}
-          className="w-full rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+          className="w-full rounded-md bg-brand-700 px-3 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-60 dark:bg-brand-300 dark:text-brand-950 dark:hover:bg-brand-200"
         >
           {loading ? "登录中…" : "登录"}
         </button>

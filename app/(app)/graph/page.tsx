@@ -10,7 +10,7 @@ export default async function GraphPage() {
         <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">[[双向链接]]</code>
         。拖拽布局、滚轮缩放，点击节点跳转。
       </p>
-      <div className="h-[70vh] min-h-[480px] rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="h-[70vh] min-h-[480px] ui-panel">
         <GraphView />
       </div>
     </div>

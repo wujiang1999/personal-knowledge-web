@@ -25,8 +25,7 @@ export default async function AskPage() {
     <div className="space-y-6">
       <div>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          基于库内条目的检索增强问答：先混合检索（BM25 + 语义），再让模型**只依据检索结果**作答，
-          每条结论标出 [n] 来源编号。检索不到就直说，不会编。
+          向你的知识库提问。回答依据已有知识生成，附带可追溯的来源；没有足够资料时会明确说明。
         </p>
       </div>
 
@@ -75,7 +74,7 @@ export default async function AskPage() {
                   )}
                 </div>
                 {task.result && (
-                  <div className="prose prose-sm prose-zinc max-w-none rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900 dark:prose-invert [&>pre]:overflow-x-auto">
+                  <div className="prose prose-sm prose-zinc max-w-none ui-panel p-4 dark:prose-invert [&>pre]:overflow-x-auto">
                     <ConceptBody body={task.result.answer} titleToId={new Map()} />
                   </div>
                 )}

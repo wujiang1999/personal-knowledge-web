@@ -65,7 +65,7 @@ export default async function ReviewsPage({
         </p>
       </div>
 
-      <form method="get" action="/reviews" className="flex flex-wrap items-end gap-2 rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
+      <form method="get" action="/reviews" className="flex flex-wrap items-end gap-2 ui-panel p-3">
         <label className="text-xs text-zinc-500 dark:text-zinc-400">
           <span className="mb-1 block">风险类型</span>
           <select name="kind" defaultValue={kind ?? ""} className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900">
@@ -80,12 +80,12 @@ export default async function ReviewsPage({
             {REVIEW_SOURCES.map((value) => <option key={value} value={value}>{REVIEW_SOURCE_LABEL[value]}</option>)}
           </select>
         </label>
-        <button type="submit" className="rounded-md bg-zinc-900 px-3 py-2 text-sm text-white dark:bg-zinc-100 dark:text-zinc-900">筛选</button>
+        <button type="submit" className="rounded-md bg-brand-700 px-3 py-2 text-sm text-white dark:bg-brand-300 dark:text-brand-950">筛选</button>
         {(kind || source) && <Link href="/reviews" className="px-2 py-2 text-sm text-zinc-500 hover:underline dark:text-zinc-400">清除</Link>}
       </form>
 
       {cards.length === 0 ? (
-        <p className="rounded-lg border border-zinc-200 bg-white px-4 py-10 text-center text-sm text-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-500">
+        <p className="ui-panel px-4 py-10 text-center text-sm text-zinc-400 dark:text-zinc-500">
           队列是空的——没有符合当前筛选条件的待裁决内容
         </p>
       ) : (

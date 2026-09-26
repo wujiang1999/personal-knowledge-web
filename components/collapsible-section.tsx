@@ -18,7 +18,7 @@ export function CollapsibleSection({
 }) {
   const summary = `${title} · ${count} 条${newest ? ` · ${newestLabel} ${newest}` : ""}`;
   return (
-    <details className="group rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+    <details className="group ui-panel">
       <summary className="flex cursor-pointer select-none items-center justify-between px-4 py-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
         <span>{summary}</span>
         <span className="text-xs text-zinc-500 group-open:hidden dark:text-zinc-400">点击展开</span>

@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { UiIcon } from "@/components/ui-icon";
 
 export interface DirectoryTreeConcept {
   id: string;
@@ -87,7 +88,7 @@ function FolderNode({
   const hasMenu = menuFor === node.key;
   return (
     <div className={depth > 0 ? "ml-4 border-l border-zinc-200 pl-3 dark:border-zinc-700" : ""}>
-      <div className="group flex min-w-0 items-center gap-1 rounded-md px-1 py-1.5 hover:bg-zinc-50 dark:hover:bg-zinc-800/70">
+      <div className="group flex min-w-0 items-center gap-1 rounded-md px-1 py-2 hover:bg-zinc-50 dark:hover:bg-zinc-800/70">
         <button
           type="button"
           onClick={() => toggle(node.key)}
@@ -96,7 +97,7 @@ function FolderNode({
           className="flex items-center gap-1 rounded text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
           <Caret open={isOpen} />
-          <span aria-hidden="true">{isOpen ? "📂" : "📁"}</span>
+          <UiIcon name="folder" className={`h-4 w-4 ${isOpen ? "text-brand-500" : "text-zinc-400"}`} />
         </button>
         <Link
           href={`/knowledge?category=${encodeURIComponent(node.key)}`}
@@ -207,7 +208,7 @@ function RootConceptsNode({
           className="flex items-center gap-1 rounded text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
           <Caret open={isOpen} />
-          <span aria-hidden="true">{isOpen ? "📂" : "📁"}</span>
+          <UiIcon name="folder" className={`h-4 w-4 ${isOpen ? "text-brand-500" : "text-zinc-400"}`} />
         </button>
         <span className="font-medium text-zinc-700 dark:text-zinc-300">根目录</span>
         <span className="text-xs text-zinc-400 dark:text-zinc-500">({concepts.length})</span>

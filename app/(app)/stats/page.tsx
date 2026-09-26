@@ -33,7 +33,7 @@ function fmtBytes(n: number): string {
 }
 
 const tile =
-  "rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900";
+  "ui-panel p-4";
 const tileLabel = "text-sm text-zinc-500 dark:text-zinc-400";
 const tileValue = "text-3xl font-semibold";
 const th =
@@ -61,7 +61,7 @@ function KeyUsageTable({ rows }: { rows: KeyUsageRow[] }) {
     return <p className="text-sm text-zinc-500 dark:text-zinc-400">还没有 API key。</p>;
   }
   return (
-    <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+    <div className="overflow-x-auto ui-panel">
       <table className="w-full min-w-[680px] text-sm">
         <thead>
           <tr>
@@ -104,7 +104,7 @@ function TopRetrievedTable({ rows }: { rows: TopRetrievedRow[] }) {
     );
   }
   return (
-    <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+    <div className="overflow-x-auto ui-panel">
       <table className="w-full min-w-[560px] text-sm">
         <thead>
           <tr>
@@ -209,7 +209,7 @@ export default async function StatsPage({
               href={`/stats?days=${r}`}
               className={`rounded-md px-3 py-1.5 text-sm ${
                 r === days
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                  ? "bg-brand-700 text-white dark:bg-brand-300 dark:text-brand-950"
                   : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
               }`}
             >
@@ -253,7 +253,7 @@ export default async function StatsPage({
                 { label: "P95 耗时", value: `${search.p95Ms} ms` },
               ]}
             />
-            <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="overflow-x-auto ui-panel">
               <table className="w-full min-w-[420px] text-sm">
                 <thead>
                   <tr>

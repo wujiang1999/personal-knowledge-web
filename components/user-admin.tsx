@@ -106,7 +106,7 @@ export function UserAdmin({ users, actingUsername }: { users: UserItem[]; acting
         </p>
         <button
           onClick={() => setShowForm((v) => !v)}
-          className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+          className="rounded-md bg-brand-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-800 dark:bg-brand-300 dark:text-brand-950 dark:hover:bg-brand-200"
         >
           {showForm ? "收起" : "+ 新建账号"}
         </button>
@@ -132,7 +132,7 @@ export function UserAdmin({ users, actingUsername }: { users: UserItem[]; acting
       )}
 
       {showForm && (
-        <form onSubmit={createUser} className="flex flex-wrap items-end gap-3 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <form onSubmit={createUser} className="flex flex-wrap items-end gap-3 ui-panel p-4">
           <label className="text-sm">
             <span className="mb-1 block text-zinc-500 dark:text-zinc-400">用户名（2-32 位，可中文，不含空格和符号）</span>
             <input
@@ -165,14 +165,14 @@ export function UserAdmin({ users, actingUsername }: { users: UserItem[]; acting
           <button
             type="submit"
             disabled={busy}
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+            className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-50 dark:bg-brand-300 dark:text-brand-950"
           >
             创建
           </button>
         </form>
       )}
 
-      <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="overflow-x-auto ui-panel">
         <table className="w-full min-w-[760px] text-sm">
           <thead>
             <tr>

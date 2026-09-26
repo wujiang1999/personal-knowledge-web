@@ -96,7 +96,7 @@ export default async function ConceptDetailPage({
 
       <section>
         <h2 className="mb-3 font-medium">编辑（保存生成新版本 v{concept.current_version + 1}）</h2>
-        <div className="rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="ui-panel p-6">
           <ConceptForm
             mode="edit"
             initial={{
@@ -116,7 +116,7 @@ export default async function ConceptDetailPage({
       {backlinks.length > 0 && (
         <section>
           <h2 className="mb-2 font-medium">被引用（{backlinks.length}）</h2>
-          <ul className="divide-y rounded-lg border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
+          <ul className="divide-y ui-panel dark:divide-zinc-800">
             {backlinks.map((b) => (
               <li key={b.id} className="flex items-center justify-between px-4 py-2 text-sm">
                 <Link href={`/knowledge/${b.id}`} className="hover:underline">
@@ -134,7 +134,7 @@ export default async function ConceptDetailPage({
       {uniqueOutgoing.length > 0 && (
         <section>
           <h2 className="mb-2 font-medium">链接到（{uniqueOutgoing.length}）</h2>
-          <ul className="divide-y rounded-lg border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
+          <ul className="divide-y ui-panel dark:divide-zinc-800">
             {uniqueOutgoing.map((ref) => {
               const targetId = titleToId.get(ref.title.toLowerCase());
               return (
@@ -173,7 +173,7 @@ export default async function ConceptDetailPage({
             <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">[[链接]]</code>
             ，可在对应条目的编辑器里补上。
           </p>
-          <ul className="divide-y rounded-lg border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
+          <ul className="divide-y ui-panel dark:divide-zinc-800">
             {unlinked.map((m) => (
               <li key={m.id} className="px-4 py-2 text-sm">
                 <Link href={`/knowledge/${m.id}`} className="hover:underline">

@@ -48,7 +48,7 @@ function SearchTable({ rows, showUser }: { rows: SearchLogRow[]; showUser: boole
     return <p className="text-sm text-zinc-500 dark:text-zinc-400">当前筛选范围内没有查询记录。</p>;
   }
   return (
-    <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+    <div className="overflow-x-auto ui-panel">
       <table className="w-full min-w-[680px] text-sm">
         <thead>
           <tr>
@@ -86,7 +86,7 @@ function CallTable({ rows, showUser }: { rows: LlmCallRow[]; showUser: boolean }
     return <p className="text-sm text-zinc-500 dark:text-zinc-400">当前筛选范围内没有调用记录。</p>;
   }
   return (
-    <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+    <div className="overflow-x-auto ui-panel">
       <table className="w-full min-w-[760px] text-sm">
         <thead>
           <tr>
@@ -163,7 +163,7 @@ export default async function LogsPage({
         href={href}
         className={`rounded-md px-3 py-1.5 text-sm ${
           active
-            ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+            ? "bg-brand-700 text-white dark:bg-brand-300 dark:text-brand-950"
             : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
         }`}
       >
@@ -194,7 +194,7 @@ export default async function LogsPage({
         </div>
       </div>
 
-      <form method="get" action="/logs" className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-white p-3 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+      <form method="get" action="/logs" className="flex flex-wrap items-center gap-2 ui-panel p-3 text-sm">
         <label htmlFor="log-date" className="text-zinc-500 dark:text-zinc-400">
           按日期筛选（北京时间当日）：
         </label>
@@ -205,7 +205,7 @@ export default async function LogsPage({
           defaultValue={date ?? ""}
           className="rounded-md border border-zinc-300 px-2 py-1 dark:border-zinc-700 dark:bg-zinc-800"
         />
-        <button type="submit" className="rounded-md bg-zinc-900 px-3 py-1.5 text-white dark:bg-zinc-100 dark:text-zinc-900">
+        <button type="submit" className="rounded-md bg-brand-700 px-3 py-1.5 text-white dark:bg-brand-300 dark:text-brand-950">
           应用
         </button>
         {(date || daysParam) && (

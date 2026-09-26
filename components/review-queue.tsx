@@ -27,7 +27,7 @@ export interface ReviewCardItem {
 }
 
 const btnPrimary =
-  "rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300";
+  "rounded-md bg-brand-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-800 disabled:opacity-60 dark:bg-brand-300 dark:text-brand-950 dark:hover:bg-brand-200";
 const btnSecondary =
   "rounded-md border border-zinc-300 px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800";
 const textareaCls =
@@ -83,7 +83,7 @@ export function ReviewQueue({ items }: { items: ReviewCardItem[] }) {
         return (
           <article
             key={item.id}
-            className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"
+            className="ui-panel p-4"
           >
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">

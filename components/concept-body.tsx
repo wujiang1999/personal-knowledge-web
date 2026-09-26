@@ -149,7 +149,7 @@ function MarkdownBlocks({ body, titleToId, embeds }: BodyProps) {
 
 export function ConceptBody({ body, titleToId, embeds }: BodyProps) {
   return (
-    <div className="prose prose-sm prose-zinc max-w-none rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900 dark:prose-invert [&>pre]:overflow-x-auto [&>.katex-display]:overflow-x-auto">
+    <div className="prose prose-sm prose-zinc max-w-none ui-panel p-4 dark:prose-invert [&>pre]:overflow-x-auto [&>.katex-display]:overflow-x-auto">
       <MarkdownBlocks body={body} titleToId={titleToId} embeds={embeds} />
     </div>
   );

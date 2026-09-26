@@ -65,7 +65,7 @@ export function AskPanel() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
+    <form onSubmit={onSubmit} className="ui-panel p-6">
       <label className="mb-1 block text-sm text-zinc-600 dark:text-zinc-300" htmlFor="ask-question">
         问点什么（答案只依据知识库里检索到的条目，并逐句标注来源）
       </label>
@@ -82,7 +82,7 @@ export function AskPanel() {
         <button
           type="submit"
           disabled={busy || question.trim().length === 0}
-          className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+          className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-60 dark:bg-brand-300 dark:text-brand-950 dark:hover:bg-brand-200"
         >
           {busy ? "生成中…" : "提问"}
         </button>

@@ -25,7 +25,7 @@ const KIND_BADGE: Record<ChangeKind, string> = {
   docs: "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
 };
 
-const card = "rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900";
+const card = "ui-panel";
 
 function fmtDate(iso: string): string {
   return new Date(`${iso}T00:00:00`).toLocaleDateString("zh-CN", {

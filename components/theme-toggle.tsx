@@ -1,5 +1,6 @@
 "use client";
 
+import { UiIcon } from "@/components/ui-icon";
 import { useSyncExternalStore } from "react";
 
 // The `dark` class on <html> is owned by the inline theme-init script in
@@ -35,7 +36,7 @@ export function ThemeToggle() {
       aria-label="切换深色/浅色模式"
       className="flex h-10 w-10 items-center justify-center rounded-md text-xl text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
     >
-      {dark === null ? "🌓" : dark ? "☀️" : "🌙"}
+      <UiIcon name={dark ? "sun" : "moon"} className="h-[18px] w-[18px]" />
     </button>
   );
 }
