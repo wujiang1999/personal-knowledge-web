@@ -1,3 +1,39 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+html,
+.app-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #a1a1aa transparent;
+}
+
+html.dark,
+html.dark .app-scrollbar {
+  scrollbar-color: #52525b transparent;
+}
+
+html::-webkit-scrollbar,
+.app-scrollbar::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+html::-webkit-scrollbar-track,
+.app-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+html::-webkit-scrollbar-thumb,
+.app-scrollbar::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #a1a1aa;
+  background-clip: padding-box;
+}
+
+html.dark::-webkit-scrollbar-thumb,
+html.dark .app-scrollbar::-webkit-scrollbar-thumb {
+  background: #52525b;
+  background-clip: padding-box;
+}

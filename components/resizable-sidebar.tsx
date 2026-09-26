@@ -100,7 +100,7 @@ export function ResizableAppShell({
         className="sticky top-0 hidden h-screen flex-col border-r border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 md:flex"
       >
         <div className="flex h-16 shrink-0 items-center px-5 text-lg font-semibold">知识库</div>
-        <nav className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 py-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <nav className="app-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 py-3">
           {navigation}
         </nav>
         <div className="shrink-0 border-t border-zinc-200 bg-white/70 p-3 dark:border-zinc-800 dark:bg-zinc-950/90">

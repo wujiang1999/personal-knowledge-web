@@ -6,6 +6,7 @@ import { ResizableAppShell } from "@/components/resizable-sidebar";
 import { QuickSwitcher } from "@/components/quick-switcher";
 import { PageTitle } from "@/components/page-title";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { MobileNavigation } from "@/components/mobile-navigation";
 
 const overview: NavItem = { href: "/dashboard", label: "概览" };
 
@@ -74,20 +75,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       }
     >
       <div className="min-w-0">
-        <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95 md:hidden">
-          <div className="flex h-14 items-center justify-between gap-3 px-4">
-            <span className="shrink-0 font-semibold">知识库</span>
-            <div className="flex items-center gap-1">
-              <QuickSwitcher />
-              <ThemeToggle />
-              <span className="hidden text-sm text-zinc-500 dark:text-zinc-400 sm:inline">{user.username}</span>
-              <LogoutButton />
-            </div>
-          </div>
-          <nav className="max-h-[60vh] overflow-y-auto border-t border-zinc-200 px-2 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden dark:border-zinc-800">
-            <GroupedNavLinks overview={overview} groups={groups} />
-          </nav>
-        </header>
+        <MobileNavigation overview={overview} groups={groups} />
         <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 md:px-8">
           <PageTitle overview={overview} groups={groups} />
           {children}

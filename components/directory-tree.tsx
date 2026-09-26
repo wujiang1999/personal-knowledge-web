@@ -87,7 +87,7 @@ function FolderNode({
   const hasMenu = menuFor === node.key;
   return (
     <div className={depth > 0 ? "ml-4 border-l border-zinc-200 pl-3 dark:border-zinc-700" : ""}>
-      <div className="group flex items-center gap-1 py-0.5">
+      <div className="group flex min-w-0 items-center gap-1 rounded-md px-1 py-1.5 hover:bg-zinc-50 dark:hover:bg-zinc-800/70">
         <button
           type="button"
           onClick={() => toggle(node.key)}
@@ -100,11 +100,12 @@ function FolderNode({
         </button>
         <Link
           href={`/knowledge?category=${encodeURIComponent(node.key)}`}
-          className="font-medium text-zinc-800 hover:underline dark:text-zinc-100"
+          className="min-w-0 flex-1 truncate font-medium text-zinc-800 hover:underline dark:text-zinc-100"
+          title={node.name}
         >
           {node.name}
         </Link>
-        <span className="text-xs text-zinc-400 dark:text-zinc-500">({node.total})</span>
+        <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">{node.total}</span>
         <div className="relative">
           <button
             type="button"
@@ -112,7 +113,7 @@ function FolderNode({
             aria-haspopup="menu"
             aria-expanded={hasMenu}
             onClick={() => onMenuToggle(hasMenu ? null : node.key)}
-            className="rounded px-1 text-xs text-zinc-400 opacity-0 hover:bg-zinc-100 hover:text-zinc-700 focus:opacity-100 group-hover:opacity-100 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+            className="rounded px-1.5 py-0.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
           >
             ⋯
           </button>
@@ -400,14 +401,14 @@ export function DirectoryTree({ roots, rootConcepts }: { roots: DirectoryTreeFol
 
   return (
     <div>
-      <div className="mb-2 flex items-center justify-end gap-3">
+      <div className="mb-3 flex flex-wrap items-center justify-start gap-2 border-b border-zinc-100 pb-3 dark:border-zinc-800">
         <button
           type="button"
           onClick={() => {
             setError(null);
             setDialog({ type: "create", path: "" });
           }}
-          className="text-xs text-zinc-400 hover:text-zinc-700 hover:underline dark:text-zinc-500 dark:hover:text-zinc-200"
+          className="rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
           + 新建文件夹
         </button>
@@ -415,7 +416,7 @@ export function DirectoryTree({ roots, rootConcepts }: { roots: DirectoryTreeFol
           <button
             type="button"
             onClick={() => setOpen(allOpen ? new Set() : new Set(allKeys))}
-            className="text-xs text-zinc-400 hover:text-zinc-700 hover:underline dark:text-zinc-500 dark:hover:text-zinc-200"
+            className="rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
           >
             {allOpen ? "收起全部" : "展开全部"}
           </button>
