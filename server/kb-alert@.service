@@ -6,3 +6,5 @@ Type=oneshot
 User=ubuntu
 Group=ubuntu
 ExecStart=/usr/local/sbin/kb-notify %i
+TimeoutStartSec=60s
+KillMode=control-group
